@@ -5,6 +5,7 @@ import { signInOrUp, signOut } from './lib/auth'
 export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [role, setRole] = useState(null)
   const [view, setView] = useState({ name: 'dashboard' })
 
   useEffect(() => {
@@ -16,12 +17,22 @@ export default function App() {
     return () => sub.subscription.unsubscribe()
   }, [])
 
+  // Learn this account's hub role. Only an explicitly allow-listed 'viewer' (e.g. a friend
+  // with read-only access) is restricted; everyone else — owner, or an un-provisioned account
+  // before the profiles table exists — gets the full UI. RLS is the real gate; this is polish.
+  useEffect(() => {
+    if (!session) { setRole(null); return }
+    supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle()
+      .then(({ data }) => setRole(data?.role ?? null))
+  }, [session])
+
   if (loading) return <Centered>Loading…</Centered>
   if (!session) return <Login />
+  const isViewer = role === 'viewer'
   return view.name === 'module' ? (
-    <ModulePage code={view.code} onBack={() => setView({ name: 'dashboard' })} />
+    <ModulePage code={view.code} isViewer={isViewer} onBack={() => setView({ name: 'dashboard' })} />
   ) : (
-    <Dashboard onOpenModule={(code) => setView({ name: 'module', code })} />
+    <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
   )
 }
 
@@ -88,7 +99,7 @@ function Login() {
   )
 }
 
-function Dashboard({ onOpenModule }) {
+function Dashboard({ isViewer, onOpenModule }) {
   const [name, setName] = useState('')
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
@@ -98,17 +109,20 @@ function Dashboard({ onOpenModule }) {
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setName(data.user?.email?.split('@')[0] || 'Student'))
     ;(async () => {
-      const [m, a, g] = await Promise.all([
+      const [m, a] = await Promise.all([
         supabase.from('modules').select('*').order('code'),
         supabase.from('assessments').select('*, modules(code,colour)').eq('status', 'upcoming').order('due_date'),
-        supabase.from('goals').select('*').eq('done', false).order('target_date'),
       ])
       if (m.error) setError(m.error.message)
       setModules(m.data || [])
       setDeadlines(a.data || [])
-      setGoals(g.data || [])
+      // Personal study goals are owner-only — a read-only viewer never sees this section.
+      if (!isViewer) {
+        const g = await supabase.from('goals').select('*').eq('done', false).order('target_date')
+        setGoals(g.data || [])
+      }
     })()
-  }, [])
+  }, [isViewer])
 
   return (
     <div className="min-h-screen">
@@ -160,17 +174,19 @@ function Dashboard({ onOpenModule }) {
           </div>
         </Section>
 
-        <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
-          <div className="panel">
-            {goals.map((g) => <div className="row" key={g.id}>{g.text}</div>)}
-          </div>
-        </Section>
+        {!isViewer && (
+          <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
+            <div className="panel">
+              {goals.map((g) => <div className="row" key={g.id}>{g.text}</div>)}
+            </div>
+          </Section>
+        )}
       </main>
     </div>
   )
 }
 
-function ModulePage({ code, onBack }) {
+function ModulePage({ code, isViewer, onBack }) {
   const [mod, setMod] = useState(null)
   const [units, setUnits] = useState([])
   const [summaries, setSummaries] = useState([])
@@ -202,7 +218,9 @@ function ModulePage({ code, onBack }) {
   return (
     <div className="min-h-screen">
       <Header onBack={onBack}>
-        <button onClick={() => setShowKit(true)} className="icon-btn" style={{ borderColor: accent, color: accent }}>🎙️ NotebookLM</button>
+        {!isViewer && (
+          <button onClick={() => setShowKit(true)} className="icon-btn" style={{ borderColor: accent, color: accent }}>🎙️ NotebookLM</button>
+        )}
       </Header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
@@ -232,7 +250,7 @@ function ModulePage({ code, onBack }) {
                     <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
                       📄 {s.title}
                     </button>
-                  )) : <span className="muted text-sm">No summary yet — ask your tutor to make one.</span>}
+                  )) : <span className="muted text-sm">{isViewer ? 'No summary yet.' : 'No summary yet — ask your tutor to make one.'}</span>}
                 </div>
               </div>
             ))}
@@ -252,7 +270,7 @@ function ModulePage({ code, onBack }) {
       </main>
 
       {openSummary && <SummaryViewer summary={openSummary} accent={accent} onClose={() => setOpenSummary(null)} />}
-      {showKit && <NotebookLMKit mod={mod} units={units} accent={accent} onClose={() => setShowKit(false)} />}
+      {showKit && !isViewer && <NotebookLMKit mod={mod} units={units} accent={accent} onClose={() => setShowKit(false)} />}
     </div>
   )
 }
