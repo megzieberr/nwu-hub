@@ -30,7 +30,7 @@ export default function App() {
   if (!session) return <Login />
   const isViewer = role === 'viewer'
   return view.name === 'module' ? (
-    <ModulePage code={view.code} isViewer={isViewer} onBack={() => setView({ name: 'dashboard' })} />
+    <ModulePage code={view.code} isViewer={isViewer} userId={session.user.id} onBack={() => setView({ name: 'dashboard' })} />
   ) : (
     <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
   )
@@ -186,11 +186,15 @@ function Dashboard({ isViewer, onOpenModule }) {
   )
 }
 
-function ModulePage({ code, isViewer, onBack }) {
+function ModulePage({ code, isViewer, userId, onBack }) {
   const [mod, setMod] = useState(null)
   const [units, setUnits] = useState([])
   const [summaries, setSummaries] = useState([])
   const [assessments, setAssessments] = useState([])
+  const [resources, setResources] = useState([])
+  const [papers, setPapers] = useState([])
+  const [parts, setParts] = useState([])
+  const [profiles, setProfiles] = useState({})
   const [openSummary, setOpenSummary] = useState(null)
   const [showKit, setShowKit] = useState(false)
 
@@ -199,14 +203,31 @@ function ModulePage({ code, isViewer, onBack }) {
       const { data: m } = await supabase.from('modules').select('*').eq('code', code).maybeSingle()
       if (!m) return
       setMod(m)
-      const [u, s, a] = await Promise.all([
+      // The last three tables (0003) may not exist pre-migration — Supabase returns an error
+      // object rather than throwing, so `?.data || []` just yields empty sections. Safe.
+      const [u, s, a, res, pp, profs] = await Promise.all([
         supabase.from('study_units').select('*').eq('module_id', m.id).order('number'),
         supabase.from('summaries').select('id,title,kind,unit_id,html').eq('module_id', m.id).order('created_at'),
         supabase.from('assessments').select('*').eq('module_id', m.id).order('due_date'),
+        supabase.from('resources').select('*').eq('module_id', m.id).order('created_at'),
+        supabase.from('past_papers').select('*').eq('module_id', m.id)
+          .order('year', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }),
+        supabase.from('profiles').select('id, display_name, role'),
       ])
       setUnits(u.data || [])
       setSummaries(s.data || [])
       setAssessments(a.data || [])
+      setResources(res.data || [])
+      setPapers(pp.data || [])
+      const pmap = {}
+      ;(profs.data || []).forEach((p) => { pmap[p.id] = p })
+      setProfiles(pmap)
+      // Party Quest parts hang off assessments, so fetch them once the ids are known.
+      const aids = (a.data || []).map((x) => x.id)
+      if (aids.length) {
+        const { data: partData } = await supabase.from('project_parts').select('*').in('assessment_id', aids).order('position')
+        setParts(partData || [])
+      }
     })()
   }, [code])
 
@@ -267,6 +288,15 @@ function ModulePage({ code, isViewer, onBack }) {
             ))}
           </div>
         </Section>
+
+        <CodexFiles resources={resources} units={units} accent={accent} />
+
+        <TrainingGrounds papers={papers} accent={accent} />
+
+        <PartyQuests
+          parts={parts} setParts={setParts} assessments={assessments}
+          profiles={profiles} userId={userId} accent={accent}
+        />
       </main>
 
       {openSummary && <SummaryViewer summary={openSummary} accent={accent} onClose={() => setOpenSummary(null)} />}
@@ -351,5 +381,190 @@ function Section({ title, empty, children }) {
       <h2 className="section-label mb-3">{title}</h2>
       {empty ? <p className="muted text-sm">{empty}</p> : children}
     </section>
+  )
+}
+
+// ---- shared download helper: signed URL (works for viewers too), blob fallback ----
+async function downloadResource(path) {
+  const { data, error } = await supabase.storage.from('resources').createSignedUrl(path, 300)
+  if (!error && data?.signedUrl) { window.open(data.signedUrl, '_blank', 'noopener'); return }
+  const dl = await supabase.storage.from('resources').download(path)
+  if (dl.error) { alert('Download failed: ' + dl.error.message); return }
+  const url = URL.createObjectURL(dl.data)
+  window.open(url, '_blank', 'noopener')
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
+
+function humanSize(bytes) {
+  if (bytes == null) return ''
+  const kb = bytes / 1024
+  return kb < 1024 ? `${Math.max(1, Math.round(kb))} KB` : `${(kb / 1024).toFixed(1)} MB`
+}
+
+// ---- Codex · Files (course PDFs + NotebookLM slide PDFs) ----
+function CodexFiles({ resources, units, accent }) {
+  if (!resources.length) return null
+  const unitById = {}
+  units.forEach((u) => { unitById[u.id] = u })
+  const groups = [
+    { key: 'course_pdf', label: 'Course PDFs', items: resources.filter((r) => r.kind === 'course_pdf') },
+    { key: 'notebooklm', label: 'NotebookLM Slides', items: resources.filter((r) => r.kind === 'notebooklm') },
+    { key: 'other', label: 'Other', items: resources.filter((r) => r.kind === 'other') },
+  ].filter((g) => g.items.length)
+
+  return (
+    <Section title="Codex · Files">
+      <div className="space-y-4">
+        {groups.map((g) => (
+          <div key={g.key}>
+            <div className="section-label mb-2" style={{ color: accent }}>{g.label}</div>
+            <div className="panel">
+              {g.items.map((r) => {
+                const unit = r.unit_id ? unitById[r.unit_id] : null
+                return (
+                  <div className="row" key={r.id}>
+                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                      <span className="truncate">📄 {r.title}</span>
+                      {unit && <span className="chip">Unit {unit.number}</span>}
+                    </span>
+                    <span className="flex items-center gap-3" style={{ flex: '0 0 auto' }}>
+                      {r.size_bytes != null && <span className="muted text-xs">{humanSize(r.size_bytes)}</span>}
+                      <button onClick={() => downloadResource(r.storage_path)} className="btn small ghost"
+                        style={{ borderColor: accent, color: accent }}>⭳ Download</button>
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+// ---- Training Grounds · Past & Practice Papers ----
+function TrainingGrounds({ papers, accent }) {
+  if (!papers.length) return null
+  return (
+    <Section title="Training Grounds · Past & Practice Papers">
+      <div className="panel">
+        {papers.map((p) => (
+          <div className="row" key={p.id}>
+            <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+              <span className="truncate">{p.title}</span>
+              {p.kind === 'practice' && (
+                <span className="chip" style={{ borderColor: accent, color: accent }}>practice</span>
+              )}
+            </span>
+            <span className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
+              <button onClick={() => downloadResource(p.paper_path)} className="btn small"
+                style={{ background: accent, borderColor: accent, color: '#04121f' }}>Paper</button>
+              {p.memo_path
+                ? <button onClick={() => downloadResource(p.memo_path)} className="btn small ghost"
+                    style={{ borderColor: accent, color: accent }}>Memo</button>
+                : <span className="chip" title="No memo yet">memo —</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+// ---- Party Quests · pair-project part checklists ----
+function PartyQuests({ parts, setParts, assessments, profiles, userId, accent }) {
+  const [toast, setToast] = useState('')
+
+  // group parts under their assessment, keeping assessment order
+  const byAssessment = assessments
+    .map((a) => ({ a, parts: parts.filter((p) => p.assessment_id === a.id) }))
+    .filter((g) => g.parts.length)
+  if (!byAssessment.length) return null
+
+  const nameFor = (uid) => {
+    if (uid === userId) return 'You'
+    return profiles[uid]?.display_name || (profiles[uid]?.role === 'viewer' ? 'Partner' : 'Owner')
+  }
+
+  // optimistic write; revert + toast on failure (house rule: never drop a save silently)
+  async function savePart(part, fields) {
+    const prev = { done: part.done, done_at: part.done_at, note: part.note }
+    setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...fields } : p)))
+    const { data, error } = await supabase.from('project_parts').update(fields).eq('id', part.id).select('id')
+    if (error || !data?.length) {
+      setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...prev } : p)))
+      setToast('Could not save — ' + (error?.message || 'not authorised'))
+      setTimeout(() => setToast(''), 4000)
+      return false
+    }
+    return true
+  }
+
+  const toggle = (part) => {
+    const done = !part.done
+    savePart(part, { done, done_at: done ? new Date().toISOString() : null })
+  }
+
+  return (
+    <Section title="Party Quests">
+      {toast && (
+        <div className="panel p-3 mb-3 text-sm" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>{toast}</div>
+      )}
+      <div className="space-y-4">
+        {byAssessment.map(({ a, parts: aParts }) => {
+          const done = aParts.filter((p) => p.done).length
+          return (
+            <div key={a.id} className="panel p-4" style={{ borderTop: `2px solid ${accent}` }}>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="font-bold" style={{ color: '#eaf4ff', fontSize: 16 }}>{a.title}</div>
+                <span className="chip" style={{ borderColor: accent, color: accent }}>{done}/{aParts.length} done</span>
+              </div>
+              <div className="space-y-2">
+                {aParts.map((p) => {
+                  const mine = p.assigned_to === userId
+                  return (
+                    <div key={p.id} className="flex items-start gap-3" style={{ padding: '6px 2px' }}>
+                      <button
+                        onClick={mine ? () => toggle(p) : undefined}
+                        aria-label={p.done ? 'Done' : 'Not done'}
+                        disabled={!mine}
+                        style={{
+                          flex: '0 0 auto', width: 22, height: 22, marginTop: 1, borderRadius: 6,
+                          border: `2px solid ${p.done ? accent : 'var(--line-strong)'}`,
+                          background: p.done ? accent : 'transparent',
+                          color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px',
+                          cursor: mine ? 'pointer' : 'default',
+                        }}
+                      >{p.done ? '✓' : ''}</button>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span style={{ color: p.done ? 'var(--muted)' : 'var(--text)', textDecoration: p.done ? 'line-through' : 'none' }}>
+                            {p.title}
+                          </span>
+                          <span className="chip">{nameFor(p.assigned_to)}</span>
+                          {p.done && p.done_at && (
+                            <span className="muted text-xs">{new Date(p.done_at).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                        {mine ? (
+                          <input
+                            className="input mt-2" style={{ fontSize: 14, padding: '7px 10px' }}
+                            defaultValue={p.note || ''} placeholder="Add a note…"
+                            onBlur={(e) => { if ((e.target.value || '') !== (p.note || '')) savePart(p, { note: e.target.value || null }) }}
+                          />
+                        ) : (
+                          p.note && <div className="muted text-sm mt-1">“{p.note}”</div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Section>
   )
 }
