@@ -26,23 +26,20 @@ export default function App() {
 }
 
 function Centered({ children }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500">{children}</div>
-  )
+  return <div className="min-h-screen flex items-center justify-center muted">{children}</div>
 }
 
 function Header({ children, onBack }) {
   return (
-    <header className="bg-white border-b border-slate-200">
+    <header style={{ borderBottom: '1px solid var(--line)', background: 'rgba(5,7,15,0.55)', backdropFilter: 'blur(6px)' }}>
       <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {onBack && (
-            <button onClick={onBack} className="text-slate-400 hover:text-slate-800 text-sm">← Back</button>
-          )}
-          <h1 className="text-lg font-bold text-slate-800">NWU Study Hub</h1>
+          {onBack && <button onClick={onBack} className="icon-btn" aria-label="Back">←</button>}
+          <span className="brand">NWU STUDY HUB</span>
         </div>
-        <div className="flex items-center gap-4">{children}
-          <button onClick={signOut} className="text-sm text-slate-500 hover:text-slate-800">Sign out</button>
+        <div className="flex items-center gap-2">
+          {children}
+          <button onClick={signOut} className="icon-btn">⎋ Exit</button>
         </div>
       </div>
     </header>
@@ -62,41 +59,45 @@ function Login() {
     try {
       await signInOrUp(username, password)
     } catch (e) {
-      setErr(e.message || 'Could not log in.')
+      setErr(e.message || 'Access denied.')
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
-      <form onSubmit={submit} className="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
-        <h1 className="text-2xl font-bold text-slate-800">NWU Study Hub</h1>
-        <p className="text-sm text-slate-500 mt-1 mb-6">Your semester, in one place.</p>
-        <label className="block text-sm font-medium text-slate-600">Username</label>
-        <input value={username} onChange={(e) => setUsername(e.target.value)}
-          className="mt-1 mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400" />
-        <label className="block text-sm font-medium text-slate-600">Password</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400" />
-        {err && <p className="text-sm text-rose-600 mb-3">{err}</p>}
-        <button disabled={busy || !password} className="w-full rounded-lg bg-slate-800 text-white py-2 font-medium disabled:opacity-50">
-          {busy ? 'Working…' : 'Enter'}
-        </button>
-        <p className="text-xs text-slate-400 mt-4">First time here? Just pick a password — it creates your account.</p>
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 gap-7 text-center">
+      <div>
+        <div className="logo">NWU STUDY HUB</div>
+        <div className="tagline mt-3">System Access</div>
+      </div>
+      <form onSubmit={submit} className="panel bracket p-8 w-full max-w-sm text-left">
+        <div className="field mb-4">
+          <label>Hunter ID</label>
+          <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} />
+        </div>
+        <div className="field mb-4">
+          <label>Passcode</label>
+          <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </div>
+        {err && <p className="text-sm font-semibold mb-3" style={{ color: 'var(--red)' }}>{err}</p>}
+        <button className="btn w-full" disabled={busy || !password}>{busy ? 'Authorising…' : '⚔ Enter'}</button>
+        <p className="muted text-xs mt-4">First time here? Pick any passcode — it forges your account.</p>
       </form>
     </div>
   )
 }
 
 function Dashboard({ onOpenModule }) {
+  const [name, setName] = useState('')
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
   const [goals, setGoals] = useState([])
   const [error, setError] = useState('')
 
   useEffect(() => {
-    (async () => {
+    supabase.auth.getUser().then(({ data }) => setName(data.user?.email?.split('@')[0] || 'Student'))
+    ;(async () => {
       const [m, a, g] = await Promise.all([
         supabase.from('modules').select('*').order('code'),
         supabase.from('assessments').select('*, modules(code)').eq('status', 'upcoming').order('due_date'),
@@ -110,49 +111,56 @@ function Dashboard({ onOpenModule }) {
   }, [])
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen">
       <Header />
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-10">
+      <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
         {error && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 text-sm">
+          <div className="panel p-4 text-sm" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
             {error} — if this mentions a missing table, the schema hasn't been run yet.
           </div>
         )}
 
+        <div className="panel bracket p-5 flex items-center gap-4">
+          <div style={{
+            width: 62, height: 62, borderRadius: 14, flex: '0 0 auto',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '2px solid var(--cyan)', color: 'var(--cyan)', fontFamily: 'Orbitron', fontWeight: 900, fontSize: 26,
+            boxShadow: '0 0 22px rgba(56,225,255,.3) inset, 0 0 16px rgba(56,225,255,.25)', background: 'rgba(2,8,22,.5)',
+          }}>S2</div>
+          <div>
+            <div className="section-label">Student</div>
+            <div className="display text-2xl" style={{ color: '#eaf4ff' }}>{name}</div>
+            <div className="muted text-sm mt-1">Semester 2 · {modules.length} active module{modules.length === 1 ? '' : 's'}</div>
+          </div>
+        </div>
+
         <Section title="Modules" empty={!modules.length && 'No modules yet — a tutor will seed these when it orients itself.'}>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {modules.map((m) => (
-              <button key={m.id} onClick={() => onOpenModule(m.code)}
-                className="text-left bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md hover:border-slate-300 transition"
-                style={{ borderTopColor: m.colour || '#64748b', borderTopWidth: 3 }}>
-                <div className="text-xs font-mono text-slate-400">{m.code}</div>
-                <div className="font-semibold text-slate-800 mt-1 leading-snug">{m.title}</div>
-                <div className="text-xs text-slate-400 mt-2">Open →</div>
+              <button key={m.id} onClick={() => onOpenModule(m.code)} className="gate" style={{ '--accent': m.colour || 'var(--cyan)' }}>
+                <div className="code">{m.code}</div>
+                <div className="name">{m.title}</div>
+                <div className="enter">ENTER →</div>
               </button>
             ))}
           </div>
         </Section>
 
-        <Section title="Upcoming deadlines" empty={!deadlines.length && 'Nothing due yet.'}>
-          <ul className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-200">
+        <Section title="Quest Log · Upcoming" empty={!deadlines.length && 'Nothing due yet.'}>
+          <div className="panel">
             {deadlines.map((d) => (
-              <li key={d.id} className="px-4 py-3 flex items-center justify-between">
-                <span className="text-slate-700">
-                  <span className="font-mono text-xs text-slate-400 mr-2">{d.modules?.code}</span>
-                  {d.title}
-                </span>
-                <span className="text-sm text-slate-500">{d.due_date || '—'}</span>
-              </li>
+              <div className="row" key={d.id}>
+                <span><span className="mono accent" style={{ marginRight: 8 }}>{d.modules?.code}</span>{d.title}</span>
+                <span className="muted text-sm">{d.due_date || '—'}</span>
+              </div>
             ))}
-          </ul>
+          </div>
         </Section>
 
-        <Section title="This week's goals" empty={!goals.length && 'No goals set.'}>
-          <ul className="space-y-2">
-            {goals.map((g) => (
-              <li key={g.id} className="bg-white rounded-lg border border-slate-200 px-4 py-2 text-slate-700">{g.text}</li>
-            ))}
-          </ul>
+        <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
+          <div className="panel">
+            {goals.map((g) => <div className="row" key={g.id}>{g.text}</div>)}
+          </div>
         </Section>
       </main>
     </div>
@@ -183,48 +191,45 @@ function ModulePage({ code, onBack }) {
     })()
   }, [code])
 
-  if (!mod) return (<div className="min-h-screen bg-slate-50"><Header onBack={onBack} /><Centered>Loading module…</Centered></div>)
+  if (!mod) return (<div className="min-h-screen"><Header onBack={onBack} /><Centered>Loading module…</Centered></div>)
 
   const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId)
-  const accent = mod.colour || '#64748b'
+  const accent = mod.colour || 'var(--cyan)'
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen">
       <Header onBack={onBack}>
-        <button onClick={() => setShowKit(true)} className="text-sm font-medium text-white rounded-lg px-3 py-1.5"
-          style={{ background: accent }}>🎙️ NotebookLM kit</button>
+        <button onClick={() => setShowKit(true)} className="icon-btn" style={{ borderColor: accent, color: accent }}>🎙️ NotebookLM</button>
       </Header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-10">
-        <div>
-          <div className="text-xs font-mono text-slate-400">{mod.code}</div>
-          <h2 className="text-2xl font-bold text-slate-800 mt-1">{mod.title}</h2>
-          <div className="text-sm text-slate-500 mt-2 flex flex-wrap gap-x-4 gap-y-1">
-            {mod.credits != null && <span>{mod.credits} credits</span>}
-            {mod.nqf_level != null && <span>NQF {mod.nqf_level}</span>}
-            {mod.participation_pct != null && <span>Participation {mod.participation_pct}% · Exam {mod.exam_pct}%</span>}
-            {mod.pass_min != null && <span>Pass {mod.pass_min}% (exam min {mod.exam_min}%)</span>}
+      <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
+        <div className="panel bracket p-5" style={{ '--accent': accent }}>
+          <div style={{ fontFamily: 'Orbitron', fontSize: 12, letterSpacing: 1, color: accent }}>{mod.code}</div>
+          <h2 className="display text-2xl mt-1" style={{ color: '#eaf4ff' }}>{mod.title}</h2>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {mod.credits != null && <span className="chip">{mod.credits} credits</span>}
+            {mod.nqf_level != null && <span className="chip">NQF {mod.nqf_level}</span>}
+            {mod.participation_pct != null && <span className="chip">Participation {mod.participation_pct}% · Exam {mod.exam_pct}%</span>}
+            {mod.pass_min != null && <span className="chip">Pass {mod.pass_min}% · exam min {mod.exam_min}%</span>}
           </div>
         </div>
 
-        <Section title="Study units">
+        <Section title="Study Units">
           <div className="space-y-3">
             {units.map((u) => (
-              <div key={u.id} className="bg-white rounded-xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="font-semibold text-slate-800">
-                    <span className="text-slate-400 mr-2">{u.number}.</span>{u.title}
+              <div key={u.id} className="panel p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-bold" style={{ color: '#eaf4ff', fontSize: 16 }}>
+                    <span className="muted" style={{ marginRight: 8 }}>{u.number}.</span>{u.title}
                   </div>
-                  <span className="text-xs rounded-full px-2 py-0.5 bg-slate-100 text-slate-500">{u.status.replace('_', ' ')}</span>
+                  <span className="chip">{u.status.replace('_', ' ')}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {summariesFor(u.id).length ? summariesFor(u.id).map((s) => (
-                    <button key={s.id} onClick={() => setOpenSummary(s)}
-                      className="text-sm rounded-lg border px-3 py-1.5 hover:bg-slate-50"
-                      style={{ borderColor: accent, color: accent }}>
+                    <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
                       📄 {s.title}
                     </button>
-                  )) : <span className="text-sm text-slate-400">No summary yet — ask your tutor to make one.</span>}
+                  )) : <span className="muted text-sm">No summary yet — ask your tutor to make one.</span>}
                 </div>
               </div>
             ))}
@@ -232,14 +237,14 @@ function ModulePage({ code, onBack }) {
         </Section>
 
         <Section title="Assessments" empty={!assessments.length && 'None yet.'}>
-          <ul className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-200">
+          <div className="panel">
             {assessments.map((a) => (
-              <li key={a.id} className="px-4 py-3 flex items-center justify-between">
-                <span className="text-slate-700">{a.title}</span>
-                <span className="text-sm text-slate-500">{a.due_date || 'date TBC'}</span>
-              </li>
+              <div className="row" key={a.id}>
+                <span>{a.title}</span>
+                <span className="muted text-sm">{a.due_date || 'date TBC'}</span>
+              </div>
             ))}
-          </ul>
+          </div>
         </Section>
       </main>
 
@@ -267,18 +272,18 @@ function SummaryViewer({ summary, accent, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/50 flex flex-col p-3 sm:p-6">
-      <div className="bg-white rounded-xl overflow-hidden flex flex-col w-full max-w-4xl mx-auto flex-1 shadow-xl">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
-          <span className="font-medium text-slate-700 text-sm truncate">{summary.title}</span>
+    <div className="overlay p-3 sm:p-6" style={{ flexDirection: 'column' }}>
+      <div className="panel w-full max-w-4xl flex-1 flex flex-col overflow-hidden" style={{ padding: 0 }}>
+        <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: '1px solid var(--line)' }}>
+          <span className="section-label truncate">{summary.title}</span>
           <div className="flex items-center gap-2">
-            <button onClick={savePdf} className="text-sm text-white rounded-lg px-3 py-1.5" style={{ background: accent }}>⭳ Save as PDF</button>
-            <button onClick={download} className="text-sm text-slate-600 rounded-lg px-3 py-1.5 border border-slate-300 hover:bg-slate-50">Download</button>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-800 px-2">✕</button>
+            <button onClick={savePdf} className="btn small" style={{ background: accent, borderColor: accent, color: '#04121f' }}>⭳ PDF</button>
+            <button onClick={download} className="btn small ghost">Download</button>
+            <button onClick={onClose} className="icon-btn">✕</button>
           </div>
         </div>
         <iframe ref={iframeRef} title={summary.title} srcDoc={summary.html}
-          sandbox="allow-scripts allow-same-origin allow-modals allow-popups" className="flex-1 w-full bg-white" />
+          sandbox="allow-scripts allow-same-origin allow-modals allow-popups" className="flex-1 w-full" style={{ background: '#fff', border: 0 }} />
       </div>
     </div>
   )
@@ -294,7 +299,7 @@ function NotebookLMKit({ mod, units, accent, onClose }) {
     `- walks through each unit in order,\n` +
     `- explains the key concepts simply and links the history to why it matters for a future teacher,\n` +
     `- ends each section with a 20-second recap.\n\n` +
-    `Audience: a distance-learning B.Ed student revising for open-book tests. Keep it friendly and concrete, not too formal.`
+    `Audience: a distance-learning B.Ed student revising for open-book tests. Keep it friendly and concrete.`
 
   function copy() {
     navigator.clipboard.writeText(prompt).then(() => {
@@ -304,24 +309,24 @@ function NotebookLMKit({ mod, units, accent, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-lg p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="overlay p-4" onClick={onClose}>
+      <div className="system p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
-          <h3 className="font-bold text-slate-800">🎙️ NotebookLM podcast kit</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-800">✕</button>
+          <h3 className="display" style={{ color: 'var(--cyan)', fontSize: 18 }}>🎙️ NotebookLM Podcast Kit</h3>
+          <button onClick={onClose} className="icon-btn">✕</button>
         </div>
-        <p className="text-sm text-slate-500 mb-4">Open NotebookLM → new notebook → upload these sources → paste the prompt → generate an Audio Overview.</p>
+        <p className="muted text-sm mb-4">New notebook → upload these sources → paste the prompt → generate an Audio Overview. (Or just ask your tutor: “make me a podcast.”)</p>
 
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">1 · Upload these files</div>
-        <ul className="text-sm text-slate-700 bg-slate-50 rounded-lg p-3 mb-2">
-          {sources.length ? sources.map((s) => <li key={s} className="font-mono text-xs py-0.5">{s}</li>)
-            : <li className="text-slate-400">No source files recorded yet.</li>}
+        <div className="section-label mb-2">1 · Upload these files</div>
+        <ul className="text-sm mb-1" style={{ background: 'rgba(2,8,22,.5)', borderRadius: 10, padding: 12, border: '1px solid var(--line)' }}>
+          {sources.length ? sources.map((s) => <li key={s} className="mono" style={{ padding: '2px 0', color: 'var(--text)' }}>{s}</li>)
+            : <li className="muted">No source files recorded yet.</li>}
         </ul>
-        <p className="text-xs text-slate-400 mb-4">Find them in <span className="font-mono">NWU Semester 2\{mod.code}\Resources\</span></p>
+        <p className="muted text-xs mb-4">In <span className="mono">NWU Semester 2\{mod.code}\Resources\</span></p>
 
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">2 · Paste this prompt</div>
-        <pre className="text-xs text-slate-700 bg-slate-50 rounded-lg p-3 whitespace-pre-wrap max-h-48 overflow-y-auto">{prompt}</pre>
-        <button onClick={copy} className="mt-3 w-full text-white rounded-lg py-2 text-sm font-medium" style={{ background: accent }}>
+        <div className="section-label mb-2">2 · Paste this prompt</div>
+        <pre className="text-xs whitespace-pre-wrap max-h-48 overflow-y-auto" style={{ background: 'rgba(2,8,22,.5)', borderRadius: 10, padding: 12, border: '1px solid var(--line)', color: 'var(--text)' }}>{prompt}</pre>
+        <button onClick={copy} className="btn w-full mt-3" style={{ background: accent, borderColor: accent, color: '#04121f' }}>
           {copied ? 'Copied ✓' : 'Copy prompt'}
         </button>
       </div>
@@ -332,8 +337,8 @@ function NotebookLMKit({ mod, units, accent, onClose }) {
 function Section({ title, empty, children }) {
   return (
     <section>
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">{title}</h2>
-      {empty ? <p className="text-slate-400 text-sm">{empty}</p> : children}
+      <h2 className="section-label mb-3">{title}</h2>
+      {empty ? <p className="muted text-sm">{empty}</p> : children}
     </section>
   )
 }
