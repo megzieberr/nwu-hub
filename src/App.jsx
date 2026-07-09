@@ -197,11 +197,12 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [profiles, setProfiles] = useState({})
   const [openSummary, setOpenSummary] = useState(null)
   const [showKit, setShowKit] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
     (async () => {
-      const { data: m } = await supabase.from('modules').select('*').eq('code', code).maybeSingle()
-      if (!m) return
+      const { data: m, error: mErr } = await supabase.from('modules').select('*').eq('code', code).maybeSingle()
+      if (mErr || !m) { setLoadError(mErr?.message || 'Module not found.'); return }
       setMod(m)
       // The last three tables (0003) may not exist pre-migration — Supabase returns an error
       // object rather than throwing, so `?.data || []` just yields empty sections. Safe.
@@ -231,7 +232,11 @@ function ModulePage({ code, isViewer, userId, onBack }) {
     })()
   }, [code])
 
-  if (!mod) return (<div className="min-h-screen"><Header onBack={onBack} /><Centered>Loading module…</Centered></div>)
+  if (!mod) return (
+    <div className="min-h-screen"><Header onBack={onBack} />
+      <Centered>{loadError ? <span style={{ color: 'var(--red)' }}>{loadError}</span> : 'Loading module…'}</Centered>
+    </div>
+  )
 
   const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId)
   const accent = mod.colour || 'var(--cyan)'
@@ -385,14 +390,34 @@ function Section({ title, empty, children }) {
 }
 
 // ---- shared download helper: signed URL (works for viewers too), blob fallback ----
+// Uses an anchor click rather than window.open: after the awaits above, the browser's
+// user-activation has expired, so window.open() is silently killed by popup blockers
+// (common on phones) and returns null with no error — the partner's download would just
+// do nothing. An <a> click is far more reliable, and any failure is surfaced, never dropped.
 async function downloadResource(path) {
-  const { data, error } = await supabase.storage.from('resources').createSignedUrl(path, 300)
-  if (!error && data?.signedUrl) { window.open(data.signedUrl, '_blank', 'noopener'); return }
-  const dl = await supabase.storage.from('resources').download(path)
-  if (dl.error) { alert('Download failed: ' + dl.error.message); return }
-  const url = URL.createObjectURL(dl.data)
-  window.open(url, '_blank', 'noopener')
-  setTimeout(() => URL.revokeObjectURL(url), 60000)
+  try {
+    let href, revoke
+    const { data, error } = await supabase.storage.from('resources').createSignedUrl(path, 300)
+    if (!error && data?.signedUrl) {
+      href = data.signedUrl
+    } else {
+      const dl = await supabase.storage.from('resources').download(path)
+      if (dl.error) throw dl.error
+      href = URL.createObjectURL(dl.data)
+      revoke = href
+    }
+    const a = document.createElement('a')
+    a.href = href
+    a.target = '_blank'
+    a.rel = 'noopener'
+    a.download = path.split('/').pop() || ''
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    if (revoke) setTimeout(() => URL.revokeObjectURL(revoke), 60000)
+  } catch (e) {
+    alert('Download failed: ' + (e?.message || e))
+  }
 }
 
 function humanSize(bytes) {
@@ -478,6 +503,10 @@ function TrainingGrounds({ papers, accent, isViewer }) {
 // ---- Party Quests · pair-project part checklists ----
 function PartyQuests({ parts, setParts, assessments, profiles, userId, accent }) {
   const [toast, setToast] = useState('')
+  const toastTimer = useRef(null)
+  const partsRef = useRef(parts)       // freshest committed parts, for accurate revert
+  const saveChains = useRef({})         // part.id -> in-flight save chain (serialises writes)
+  useEffect(() => { partsRef.current = parts }, [parts])
 
   // group parts under their assessment, keeping assessment order
   const byAssessment = assessments
@@ -487,21 +516,34 @@ function PartyQuests({ parts, setParts, assessments, profiles, userId, accent })
 
   const nameFor = (uid) => {
     if (uid === userId) return 'You'
-    return profiles[uid]?.display_name || (profiles[uid]?.role === 'viewer' ? 'Partner' : 'Owner')
+    return profiles[uid]?.display_name || (profiles[uid]?.role === 'owner' ? 'Owner' : 'Partner')
   }
 
-  // optimistic write; revert + toast on failure (house rule: never drop a save silently)
-  async function savePart(part, fields) {
-    const prev = { done: part.done, done_at: part.done_at, note: part.note }
-    setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...fields } : p)))
-    const { data, error } = await supabase.from('project_parts').update(fields).eq('id', part.id).select('id')
-    if (error || !data?.length) {
-      setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...prev } : p)))
-      setToast('Could not save — ' + (error?.message || 'not authorised'))
-      setTimeout(() => setToast(''), 4000)
-      return false
+  function showToast(msg) {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 4000)
+  }
+
+  // Optimistic write, serialised per part. On failure we revert ONLY the fields this
+  // request touched (never a stale whole-row snapshot), so a failed tick can't also wipe
+  // a just-saved note, and a double-fail can't leave the UI disagreeing with the DB.
+  function savePart(part, fields) {
+    const run = async () => {
+      const cur = partsRef.current.find((p) => p.id === part.id) || part
+      const prev = Object.fromEntries(Object.keys(fields).map((k) => [k, cur[k]]))
+      setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...fields } : p)))
+      const { data, error } = await supabase.from('project_parts').update(fields).eq('id', part.id).select('id')
+      if (error || !data?.length) {
+        setParts((ps) => ps.map((p) => (p.id === part.id ? { ...p, ...prev } : p)))
+        showToast('Could not save — ' + (error?.message || 'not authorised'))
+        return false
+      }
+      return true
     }
-    return true
+    const chain = (saveChains.current[part.id] || Promise.resolve()).then(run, run)
+    saveChains.current[part.id] = chain
+    return chain
   }
 
   const toggle = (part) => {
