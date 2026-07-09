@@ -100,7 +100,7 @@ function Dashboard({ onOpenModule }) {
     ;(async () => {
       const [m, a, g] = await Promise.all([
         supabase.from('modules').select('*').order('code'),
-        supabase.from('assessments').select('*, modules(code)').eq('status', 'upcoming').order('due_date'),
+        supabase.from('assessments').select('*, modules(code,colour)').eq('status', 'upcoming').order('due_date'),
         supabase.from('goals').select('*').eq('done', false).order('target_date'),
       ])
       if (m.error) setError(m.error.message)
@@ -148,12 +148,15 @@ function Dashboard({ onOpenModule }) {
 
         <Section title="Quest Log · Upcoming" empty={!deadlines.length && 'Nothing due yet.'}>
           <div className="panel">
-            {deadlines.map((d) => (
-              <div className="row" key={d.id}>
-                <span><span className="mono accent" style={{ marginRight: 8 }}>{d.modules?.code}</span>{d.title}</span>
-                <span className="muted text-sm">{d.due_date || '—'}</span>
-              </div>
-            ))}
+            {deadlines.map((d) => {
+              const c = d.modules?.colour || 'var(--cyan)'
+              return (
+                <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14 }}>
+                  <span><span className="mono" style={{ marginRight: 8, color: c }}>{d.modules?.code}</span>{d.title}</span>
+                  <span className="muted text-sm">{d.due_date || '—'}</span>
+                </div>
+              )
+            })}
           </div>
         </Section>
 
@@ -261,15 +264,6 @@ function SummaryViewer({ summary, accent, onClose }) {
     const w = iframeRef.current?.contentWindow
     if (w) { w.focus(); w.print() }
   }
-  function download() {
-    const blob = new Blob([summary.html || ''], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = summary.title.replace(/[^\w.-]+/g, '_') + '.html'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
 
   return (
     <div className="overlay p-3 sm:p-6" style={{ flexDirection: 'column' }}>
@@ -277,8 +271,7 @@ function SummaryViewer({ summary, accent, onClose }) {
         <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: '1px solid var(--line)' }}>
           <span className="section-label truncate">{summary.title}</span>
           <div className="flex items-center gap-2">
-            <button onClick={savePdf} className="btn small" style={{ background: accent, borderColor: accent, color: '#04121f' }}>⭳ PDF</button>
-            <button onClick={download} className="btn small ghost">Download</button>
+            <button onClick={savePdf} className="btn small" style={{ background: accent, borderColor: accent, color: '#04121f' }} title="Opens your browser's Save-as-PDF">⭳ Save as PDF</button>
             <button onClick={onClose} className="icon-btn">✕</button>
           </div>
         </div>
