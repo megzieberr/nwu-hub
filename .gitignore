@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.DS_Store
+
+# local planning notes — keep out of the public repo
+PLAN.md
