@@ -291,7 +291,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
 
         <CodexFiles resources={resources} units={units} accent={accent} />
 
-        <TrainingGrounds papers={papers} accent={accent} />
+        <TrainingGrounds papers={papers} accent={accent} isViewer={isViewer} />
 
         <PartyQuests
           parts={parts} setParts={setParts} assessments={assessments}
@@ -444,10 +444,13 @@ function CodexFiles({ resources, units, accent }) {
 }
 
 // ---- Training Grounds · Past & Practice Papers ----
-function TrainingGrounds({ papers, accent }) {
-  if (!papers.length) return null
+function TrainingGrounds({ papers, accent, isViewer }) {
+  // Owner always sees the section (empty → placeholder, so she can confirm it renders);
+  // a viewer only sees it once there's actually a paper to download.
+  if (!papers.length && isViewer) return null
   return (
-    <Section title="Training Grounds · Past & Practice Papers">
+    <Section title="Training Grounds · Past & Practice Papers"
+      empty={!papers.length && 'No papers uploaded yet — they’ll appear here once seeded.'}>
       <div className="panel">
         {papers.map((p) => (
           <div className="row" key={p.id}>
