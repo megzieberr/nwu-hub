@@ -117,12 +117,26 @@ function Dashboard({ isViewer, onOpenModule }) {
       setModules(m.data || [])
       setDeadlines(a.data || [])
       // Personal study goals are owner-only — a read-only viewer never sees this section.
+      // Fetch done ones too so a just-ticked objective stays visible (struck through) and
+      // can be un-ticked if it was a mistake; not-done first, then by target date.
       if (!isViewer) {
-        const g = await supabase.from('goals').select('*').eq('done', false).order('target_date')
+        const g = await supabase.from('goals').select('*')
+          .order('done').order('target_date', { nullsFirst: false })
         setGoals(g.data || [])
       }
     })()
   }, [isViewer])
+
+  // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
+  async function toggleGoal(goal) {
+    const done = !goal.done
+    setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, done } : g)))
+    const { error: e } = await supabase.from('goals').update({ done }).eq('id', goal.id)
+    if (e) {
+      setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, done: goal.done } : g)))
+      setError('Could not save objective — ' + e.message)
+    }
+  }
 
   return (
     <div className="min-h-screen">
@@ -177,7 +191,27 @@ function Dashboard({ isViewer, onOpenModule }) {
         {!isViewer && (
           <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
             <div className="panel">
-              {goals.map((g) => <div className="row" key={g.id}>{g.text}</div>)}
+              {goals.map((g) => (
+                <div className="row" key={g.id} style={{ gap: 12 }}>
+                  <button
+                    onClick={() => toggleGoal(g)}
+                    aria-label={g.done ? 'Mark not done' : 'Mark done'}
+                    style={{
+                      flex: '0 0 auto', width: 22, height: 22, borderRadius: 6,
+                      border: `2px solid ${g.done ? 'var(--cyan)' : 'var(--line-strong)'}`,
+                      background: g.done ? 'var(--cyan)' : 'transparent',
+                      color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px',
+                      cursor: 'pointer',
+                    }}
+                  >{g.done ? '✓' : ''}</button>
+                  <span style={{
+                    flex: 1, minWidth: 0,
+                    color: g.done ? 'var(--muted)' : 'var(--text)',
+                    textDecoration: g.done ? 'line-through' : 'none',
+                  }}>{g.text}</span>
+                  {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
+                </div>
+              ))}
             </div>
           </Section>
         )}
@@ -208,7 +242,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       // object rather than throwing, so `?.data || []` just yields empty sections. Safe.
       const [u, s, a, res, pp, profs] = await Promise.all([
         supabase.from('study_units').select('*').eq('module_id', m.id).order('number'),
-        supabase.from('summaries').select('id,title,kind,unit_id,html').eq('module_id', m.id).order('created_at'),
+        supabase.from('summaries').select('id,title,kind,unit_id,assessment_id,html').eq('module_id', m.id).order('created_at'),
         supabase.from('assessments').select('*').eq('module_id', m.id).order('due_date'),
         supabase.from('resources').select('*').eq('module_id', m.id).order('created_at'),
         supabase.from('past_papers').select('*').eq('module_id', m.id)
@@ -238,7 +272,10 @@ function ModulePage({ code, isViewer, userId, onBack }) {
     </div>
   )
 
-  const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId)
+  // Unit summaries live under Study Units; assessment-linked briefs live under Assessments.
+  // A brief sets assessment_id (unit_id null), so guarding on both keeps them from doubling up.
+  const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId && !s.assessment_id)
+  const briefsFor = (assessmentId) => summaries.filter((s) => s.assessment_id === assessmentId)
   const accent = mod.colour || 'var(--cyan)'
 
   return (
@@ -284,13 +321,27 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         </Section>
 
         <Section title="Assessments" empty={!assessments.length && 'None yet.'}>
-          <div className="panel">
-            {assessments.map((a) => (
-              <div className="row" key={a.id}>
-                <span>{a.title}</span>
-                <span className="muted text-sm">{a.due_date || 'date TBC'}</span>
-              </div>
-            ))}
+          <div className="space-y-3">
+            {assessments.map((a) => {
+              const briefs = briefsFor(a.id)
+              return (
+                <div key={a.id} className="panel p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <span style={{ color: '#eaf4ff' }}>{a.title}</span>
+                    <span className="muted text-sm" style={{ flex: '0 0 auto' }}>{a.due_date || 'date TBC'}</span>
+                  </div>
+                  {briefs.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {briefs.map((s) => (
+                        <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
+                          📋 {s.title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </Section>
 
