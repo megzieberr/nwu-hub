@@ -44,8 +44,9 @@ export async function fetchSiteAnnouncements(client, siteId) {
   return (data?.announcement_collection ?? []).map(a => ({
     sourceId: a.id ?? a.announcementId,
     title: a.title ?? '(untitled)',
-    bodyHtml: a.body ?? null,
-    postedAt: a.createdOn ? new Date(Number(a.createdOn)).toISOString() : null,
+    bodyHtml: a.body ?? a.text ?? null,
+    // toIso never throws on an unexpected date shape — a bad date must not sink the site.
+    postedAt: toIso(a.createdOn ?? a.date ?? a.modifiedDate),
   }));
 }
 
@@ -58,18 +59,17 @@ export async function fetchSiteAssignments(client, siteId) {
   }));
 }
 
+// Sakai serialises the due date differently across versions/tools:
+//   {epochSecond}, {time: ms}, a bare epoch, an ISO string, or a preformatted dueTimeString.
+// Try each; toDay tolerates all of them and never throws.
 function assignmentDueDate(a) {
-  const epoch = a?.dueTime?.epochSecond;
-  if (epoch) return new Date(Number(epoch) * 1000).toISOString().slice(0, 10);
-  if (typeof a?.dueTimeString === 'string') return a.dueTimeString.slice(0, 10);
-  return null;
+  return toDay(a?.dueTime) ?? toDay(a?.dueDate) ?? toDay(a?.dueTimeString) ?? null;
 }
 
 export async function fetchSiteContent(client, siteId) {
   const data = await getJson(client, `/direct/content/site/${siteId}.json`);
   return (data?.content_collection ?? [])
-    // keep files only; skip folders/collections
-    .filter(c => (c.type ?? c.mimeType) && (c.type ?? c.mimeType) !== 'collection' && (c.resourceType !== 'collection'))
+    .filter(c => !isCollection(c))     // keep files only; skip folders/collections
     .map(c => ({
       sourceId: c.resourceId ?? c.id ?? c.url,
       title: c.name ?? c.title ?? 'file',
@@ -83,4 +83,45 @@ export async function fetchSiteContent(client, siteId) {
 function numOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// Is this content entry a folder/collection rather than a file? Sakai marks folders several
+// ways depending on version; check all the common ones so a folder never gets mirrored as a file.
+function isCollection(c) {
+  const t = c.type ?? c.mimeType;
+  if (t === 'collection') return true;
+  if (c.container === true) return true;
+  if (typeof c.resourceType === 'string' && /folder|collection/i.test(c.resourceType)) return true;
+  if (typeof c.url === 'string' && c.url.endsWith('/')) return true;
+  if (typeof c.resourceId === 'string' && c.resourceId.endsWith('/')) return true;
+  return false;
+}
+
+// Robust date parsing for Sakai's mixed encodings — returns a Date or null, NEVER throws.
+// Accepts: ms-epoch number/string, seconds-epoch, {epochSecond|epochMilli|time}, ISO/date string.
+function toDate(v) {
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    if (v.epochSecond != null) return toDate(Number(v.epochSecond) * 1000);
+    if (v.epochMilli  != null) return toDate(Number(v.epochMilli));
+    if (v.time        != null) return toDate(Number(v.time));
+    return null;
+  }
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) {                       // all-digits => epoch
+    let n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    if (n < 1e12) n *= 1000;                   // seconds -> ms
+    const d = new Date(n);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);                        // ISO / parseable string
+  return isNaN(d.getTime()) ? null : d;
+}
+const toIso = v => { const d = toDate(v); return d ? d.toISOString() : null; };
+// Date-only (YYYY-MM-DD). Pass through an already-date-prefixed string untouched (no tz shift).
+function toDay(v) {
+  if (typeof v === 'string') { const m = v.match(/^(\d{4}-\d{2}-\d{2})/); if (m) return m[1]; }
+  const d = toDate(v);
+  return d ? d.toISOString().slice(0, 10) : null;
 }
