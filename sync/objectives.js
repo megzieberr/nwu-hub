@@ -29,7 +29,8 @@ announcement is still kept on file for the student's AI tutor to reference, so n
 Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submit Assignment 1",
 "Register for Test 2"). Classes/sessions include the date and time ("Online class Mon 14 Jul, 09:00").
 If a clear date is stated set target_date to it (YYYY-MM-DD); otherwise null. Never invent dates.
-Return at most 3 goals.`;
+A date may omit the year — resolve it using "today" (given in the message) to the current or next
+upcoming occurrence, and NEVER output a year earlier than today's. Return at most 3 goals.`;
 
 const SCHEMA = {
   type: 'object',
@@ -77,6 +78,7 @@ export async function generateObjectives(sb) {
   if (!pending?.length) return 0;
 
   const anthropic = new Anthropic();   // reads ANTHROPIC_API_KEY from env
+  const today = new Date().toISOString().slice(0, 10);
   let created = 0;
 
   for (const a of pending) {
@@ -90,7 +92,7 @@ export async function generateObjectives(sb) {
         system: SYSTEM,
         messages: [{
           role: 'user',
-          content: `Module ${mod.code ?? ''} — ${mod.title ?? ''}\nAnnouncement: "${a.title}"\n${body}`,
+          content: `Today is ${today}.\nModule ${mod.code ?? ''} — ${mod.title ?? ''}\nAnnouncement: "${a.title}"\n${body}`,
         }],
       });
 
