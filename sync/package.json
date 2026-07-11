@@ -1,0 +1,17 @@
+{
+  "name": "nwu-hub-sync",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "eFundi -> NWU Study Hub sync worker. Runs twice daily in GitHub Actions. Not part of the Vite build.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "cheerio": "^1.0.0",
+    "got": "^14.4.2",
+    "tough-cookie": "^5.0.0"
+  }
+}
