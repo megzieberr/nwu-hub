@@ -62,7 +62,6 @@ export async function login({ username, password }) {
 
   const action = $form.attr('action') || page.url;
   const postUrl = new URL(action, page.url).toString();
-  console.log(`[auth] GET login -> ${page.statusCode}; form action=${postUrl}; fields=${Object.keys(fields).join(',')}`);
 
   // 2. POST credentials; got (methodRewriting) follows 302 -> service?ticket -> Sakai,
   //    collecting the authenticated JSESSIONID + haproxy cookies into the jar.
