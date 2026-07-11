@@ -99,7 +99,7 @@ export async function syncContent(sb, client, owner, moduleId, items, prev, coun
     // download the file from eFundi (authenticated) then upload to the private bucket
     let buf;
     try {
-      const res = await client.get(it.url, { responseType: 'buffer', timeout: { request: 60000 } });
+      const res = await client.get(it.url, { responseType: 'buffer', timeout: { request: 120000 } });
       if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`);
       buf = res.body;
     } catch (e) {
