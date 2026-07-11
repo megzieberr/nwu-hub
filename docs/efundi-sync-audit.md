@@ -59,9 +59,14 @@ logic against realistic Sakai `/direct` payloads and a fake Supabase + fake HTTP
    only proved files). Then open a raw `…/content/site/{id}.json` and `…/announcement/site/{id}.json`
    and confirm findings #5/#6 field names. That's the last unknown; everything else is proven.
 2. Then map the remaining modules into `efundi_site_map` (one insert each).
-3. **Phase 4 (announcements UI) security note:** `announcements.body_html` is lecturer-authored HTML
-   stored verbatim. When you render it, **sanitize** (e.g. DOMPurify) — don't `dangerouslySetInnerHTML`
-   raw. Low real-world risk (your own lecturers, shown only to you) but free to get right up front.
+3. ~~**Phase 4 (announcements UI) security note:** sanitize `body_html`.~~ **DONE + verified.** Phase 4
+   is built: a per-module **Announcements** section (collapsed → expandable), an **⇅ eFundi** synced
+   badge on synced files/assignments/announcements, and a **last-sync indicator** on the dashboard
+   (from `efundi_sync_runs`, owner-only). `body_html` is rendered inside a **locked-down sandboxed
+   iframe** (`sandbox="allow-popups"` — no `allow-scripts`, no `allow-same-origin`), reusing the app's
+   existing `SummaryViewer` pattern with a tighter sandbox. A headless-Chromium test confirmed a
+   4-vector hostile body (`<script>`, `img onerror`, `svg onload`, `javascript:` URL) fires with no
+   sandbox but is **fully neutralised** with it, while the real content still renders. No new deps.
 4. **Policy:** the automated twice-daily login is unchanged — worth eyeballing NWU's IT
    acceptable-use policy before relying on the schedule; revert to `workflow_dispatch`-only in one
    line if needed.
