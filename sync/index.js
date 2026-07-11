@@ -47,11 +47,13 @@ async function main() {
       if (!moduleId) { console.log(`  · skip (unmapped): ${site.title} [${site.id}]`); continue; }
       console.log(`  → syncing: ${site.title}`);
       try {
-        const [anns, asgs, files] = await Promise.all([
+        // Announcements + assignments are light — fetch concurrently. Content is heavy and
+        // times out under eFundi's latency when it competes, so give it its own clean request.
+        const [anns, asgs] = await Promise.all([
           fetchSiteAnnouncements(client, site.id),
           fetchSiteAssignments(client, site.id),
-          fetchSiteContent(client, site.id),
         ]);
+        const files = await fetchSiteContent(client, site.id);
         await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
         await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
         await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);
