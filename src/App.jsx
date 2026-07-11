@@ -263,7 +263,6 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [summaries, setSummaries] = useState([])
   const [assessments, setAssessments] = useState([])
   const [resources, setResources] = useState([])
-  const [announcements, setAnnouncements] = useState([])
   const [papers, setPapers] = useState([])
   const [parts, setParts] = useState([])
   const [profiles, setProfiles] = useState({})
@@ -278,15 +277,14 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       setMod(m)
       // The last three tables (0003) may not exist pre-migration — Supabase returns an error
       // object rather than throwing, so `?.data || []` just yields empty sections. Safe.
-      // `announcements` (0005) is owner-only via RLS: a viewer just gets an empty set, so the
-      // section self-hides. Newest first; a null posted_at (rare) sorts last.
-      const [u, s, a, res, ann, pp, profs] = await Promise.all([
+      // NOTE: eFundi-synced raw content (announcements, files) is deliberately NOT shown here —
+      // the hub surfaces only tutor-authored work. Announcements feed the objectives agent; synced
+      // files are tutor fuel. See docs/efundi-sync-plan.md. Only owner-curated files render (below).
+      const [u, s, a, res, pp, profs] = await Promise.all([
         supabase.from('study_units').select('*').eq('module_id', m.id).order('number'),
         supabase.from('summaries').select('id,title,kind,unit_id,assessment_id,html').eq('module_id', m.id).order('created_at'),
         supabase.from('assessments').select('*').eq('module_id', m.id).order('due_date'),
         supabase.from('resources').select('*').eq('module_id', m.id).order('created_at'),
-        supabase.from('announcements').select('*').eq('module_id', m.id)
-          .order('posted_at', { ascending: false, nullsFirst: false }),
         supabase.from('past_papers').select('*').eq('module_id', m.id)
           .order('year', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }),
         supabase.from('profiles').select('id, display_name, role'),
@@ -295,7 +293,6 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       setSummaries(s.data || [])
       setAssessments(a.data || [])
       setResources(res.data || [])
-      setAnnouncements(ann.data || [])
       setPapers(pp.data || [])
       const pmap = {}
       ;(profs.data || []).forEach((p) => { pmap[p.id] = p })
@@ -341,8 +338,6 @@ function ModulePage({ code, isViewer, userId, onBack }) {
           </div>
         </div>
 
-        <Announcements items={announcements} accent={accent} />
-
         <Section title="Study Units">
           <div className="space-y-3">
             {units.map((u) => (
@@ -372,10 +367,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
               return (
                 <div key={a.id} className="panel p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                      <span style={{ color: '#eaf4ff' }} className="truncate">{a.title}</span>
-                      {a.source === 'efundi' && <SyncedBadge accent={accent} />}
-                    </span>
+                    <span style={{ color: '#eaf4ff' }}>{a.title}</span>
                     <span className="muted text-sm" style={{ flex: '0 0 auto' }}>{a.due_date || 'date TBC'}</span>
                   </div>
                   {briefs.length > 0 && (
@@ -525,76 +517,10 @@ function humanSize(bytes) {
   return kb < 1024 ? `${Math.max(1, Math.round(kb))} KB` : `${(kb / 1024).toFixed(1)} MB`
 }
 
-// Small marker on rows the eFundi sync brought in (vs. hand-added).
-function SyncedBadge({ accent }) {
-  return (
-    <span className="chip" title="Auto-synced from eFundi"
-      style={{ borderColor: accent, color: accent, flex: '0 0 auto' }}>⇅ eFundi</span>
-  )
-}
-
-// Plain-text preview of an HTML body (React escapes it — safe as text).
-function stripHtml(html) {
-  return (html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim()
-}
-
-// Wrap a lecturer's announcement HTML in a minimal readable document. Rendered ONLY inside a
-// sandboxed iframe with NO allow-scripts / allow-same-origin (see Announcements), so any script,
-// inline handler, or javascript: URL in the body is inert — this is the XSS boundary.
-function announcementDoc(bodyHtml) {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank">` +
-    `<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:14px;color:#0b1220;` +
-    `line-height:1.5;font-size:14px;overflow-wrap:anywhere}a{color:#0a58ca}img{max-width:100%;height:auto}` +
-    `table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #cbd5e1;padding:4px 8px}` +
-    `pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body>${bodyHtml || ''}</body></html>`
-}
-
-// ---- Announcements (auto-synced from eFundi; incl. lecturer mark-lists) ----
-// Owner-only (RLS). Collapsed by default; the body renders in a locked-down sandboxed iframe.
-function Announcements({ items, accent }) {
-  const [openId, setOpenId] = useState(null)
-  if (!items?.length) return null
-  return (
-    <Section title="Announcements">
-      <div className="space-y-2">
-        {items.map((a) => {
-          const open = openId === a.id
-          return (
-            <div key={a.id} className="panel p-4">
-              <button
-                onClick={() => setOpenId(open ? null : a.id)}
-                aria-expanded={open}
-                className="w-full flex items-center justify-between gap-3 text-left"
-                style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
-              >
-                <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                  <span style={{ color: '#eaf4ff' }} className="truncate">{a.title}</span>
-                  <SyncedBadge accent={accent} />
-                </span>
-                <span className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
-                  {a.posted_at && <span className="muted text-xs">{new Date(a.posted_at).toLocaleDateString()}</span>}
-                  <span className="muted" aria-hidden>{open ? '▾' : '▸'}</span>
-                </span>
-              </button>
-              {!open && a.body_html && (
-                <p className="muted text-sm mt-2 truncate">{stripHtml(a.body_html)}</p>
-              )}
-              {open && (a.body_html
-                ? <iframe title={a.title} srcDoc={announcementDoc(a.body_html)}
-                    sandbox="allow-popups" className="w-full mt-3"
-                    style={{ background: '#fff', border: 0, borderRadius: 8, height: 300, maxHeight: '50vh' }} />
-                : <p className="muted text-sm mt-2">No content in this announcement.</p>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </Section>
-  )
-}
-
-// ---- Codex · Files (course PDFs + NotebookLM slide PDFs) ----
+// ---- Codex · Files (owner-curated PDFs + NotebookLM slides) ----
+// eFundi-synced files are intentionally excluded — they're tutor fuel, not hub content.
 function CodexFiles({ resources, units, accent }) {
+  resources = resources.filter((r) => r.source !== 'efundi')
   if (!resources.length) return null
   const unitById = {}
   units.forEach((u) => { unitById[u.id] = u })
@@ -618,7 +544,6 @@ function CodexFiles({ resources, units, accent }) {
                     <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
                       <span className="truncate">📄 {r.title}</span>
                       {unit && <span className="chip">Unit {unit.number}</span>}
-                      {r.source === 'efundi' && <SyncedBadge accent={accent} />}
                     </span>
                     <span className="flex items-center gap-3" style={{ flex: '0 0 auto' }}>
                       {r.size_bytes != null && <span className="muted text-xs">{humanSize(r.size_bytes)}</span>}

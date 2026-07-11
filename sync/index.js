@@ -4,11 +4,12 @@
 // and NEVER retries. Any other error records 'error'. The run row is always closed.
 
 import { login, AuthError } from './auth.js';
-import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent } from './fetch-efundi.js';
+import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
   makeSupabase, resolveOwner, loadSiteMap, existingHashes,
-  syncAnnouncements, syncAssignments, syncContent,
+  syncAnnouncements, syncAssignments, syncContent, purgeVideos,
 } from './write.js';
+import { generateObjectives } from './objectives.js';
 
 async function main() {
   const sb = makeSupabase();
@@ -27,6 +28,8 @@ async function main() {
       password: process.env.EFUNDI_PASSWORD,
     });
     console.log('✓ Authenticated to eFundi.');
+
+    await purgeVideos(sb);   // enforce "no videos in the hub" before anything else
 
     const siteMap = await loadSiteMap(sb);
     if (siteMap.size === 0)
@@ -53,7 +56,16 @@ async function main() {
           fetchSiteAnnouncements(client, site.id),
           fetchSiteAssignments(client, site.id),
         ]);
-        const files = await fetchSiteContent(client, site.id);
+        // Files can live in the Resources tool and/or embedded in Lessons pages — gather both,
+        // dedupe by the file's sakaiId (Resources entry wins; it carries size for edit-detection).
+        const [resFiles, lessonFiles] = await Promise.all([
+          fetchSiteContent(client, site.id),
+          fetchSiteLessons(client, site.id),
+        ]);
+        const byId = new Map();
+        for (const f of [...resFiles, ...lessonFiles]) if (f.sourceId && !byId.has(f.sourceId)) byId.set(f.sourceId, f);
+        const files = [...byId.values()];
+        if (lessonFiles.length) console.log(`    (${lessonFiles.length} file(s) from Lessons; ${resFiles.length} from Resources)`);
         await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
         await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
         await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);
@@ -63,6 +75,11 @@ async function main() {
         console.error(`    ! ${site.title} failed: ${e?.message ?? e}`);
       }
     }
+
+    // Processing layer: turn the announcements we just stored into study objectives.
+    // Non-fatal — a failure here never fails the sync (the raw data is already saved).
+    try { await generateObjectives(sb); }
+    catch (e) { console.warn(`  objectives agent error (non-fatal): ${e?.message ?? e}`); }
 
     await sb.from('efundi_sync_runs').update({
       finished_at: new Date().toISOString(), status: hadError ? 'partial' : 'ok',

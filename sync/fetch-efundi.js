@@ -73,7 +73,7 @@ function assignmentDueDate(a) {
 export async function fetchSiteContent(client, siteId) {
   // The content listing is the heaviest /direct response and the first to time out when eFundi
   // is slow — give it a longer budget and one retry (observed: 60s single-shot fails under load).
-  const data = await getJson(client, `/direct/content/site/${siteId}.json`, { timeout: 120000, retries: 1 });
+  const data = await getJson(client, `/direct/content/site/${siteId}.json`, { timeout: 150000, retries: 1 });
   return (data?.content_collection ?? [])
     .filter(c => !isCollection(c))     // keep files only; skip folders/collections
     .map(c => ({
@@ -83,7 +83,59 @@ export async function fetchSiteContent(client, siteId) {
       size: numOrNull(c.size ?? c.contentLength),
       lastModified: c.lastModified ?? c.modifiedDate ?? null,
       url: absoluteUrl(c.url),
-    }));
+    }))
+    // Never mirror videos — the owner transcribes the relevant ones by hand, so a copy in the
+    // hub is pure waste (and they're big). Skip by mime OR extension.
+    .filter(f => !isVideo(f.mime, f.title, f.url));
+}
+
+export const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpe?g|3gp|ogv|ts)$/i;
+export function isVideo(mime, ...names) {
+  if (typeof mime === 'string' && mime.toLowerCase().startsWith('video/')) return true;
+  return names.some(n => typeof n === 'string' && VIDEO_RE.test(n));
+}
+
+// Some modules (e.g. ALDE122) deliver materials through the Lessons tool instead of Resources.
+// Walk every lesson page and pull the embedded ContentHosting files (workbook/textbook/guides).
+//   /direct/lessons/site/{siteId}.json      -> lessons_collection (each: id, lessonTitle)
+//   /direct/lessons/lesson/{lessonId}.json  -> { contentsList: [ { sakaiId, name, type, url } ] }
+// A real file is an item whose sakaiId is a ContentHosting path (/group|/private|/attachment/...).
+// sourceId is the sakaiId itself — the SAME scheme fetchSiteContent uses — so a file that appears
+// in both tools dedupes to one row (see index.js merge) instead of fighting over it.
+export async function fetchSiteLessons(client, siteId) {
+  const site = await getJson(client, `/direct/lessons/site/${siteId}.json`, { timeout: 60000 });
+  const lessons = site?.lessons_collection ?? [];
+  const out = [];
+  const seen = new Set();
+  for (const L of lessons) {
+    const page = await getJson(client, `/direct/lessons/lesson/${L.id}.json`, { timeout: 60000 });
+    for (const it of (page?.contentsList ?? [])) {
+      const sid = typeof it.sakaiId === 'string' ? it.sakaiId : '';
+      if (!/^\/(group|private|attachment)\//.test(sid)) continue;   // embedded file only
+      if (seen.has(sid)) continue;
+      seen.add(sid);
+      const title = it.name || decodeURIComponent(sid.split('/').pop() || '') || 'file';
+      out.push({
+        sourceId: sid,
+        title,
+        mime: mimeFromName(title),
+        size: null,                    // not exposed by the Lessons API; buf.length used after download
+        lastModified: null,
+        url: `${EFUNDI}/access/content` + sid.split('/').map(encodeURIComponent).join('/'),
+      });
+    }
+  }
+  return out.filter(f => !isVideo(f.mime, f.title, f.url));
+}
+
+function mimeFromName(name = '') {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  return {
+    pdf: 'application/pdf', doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  }[ext] || null;
 }
 
 function numOrNull(v) {
