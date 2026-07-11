@@ -1,0 +1,38 @@
+name: eFundi sync
+
+# Twice daily, morning + evening SAST (UTC+2). GitHub cron is UTC, so 06:00/18:00 SAST = 04:00/16:00 UTC.
+# GitHub cron is best-effort (can be delayed under load) — fine for twice-daily.
+# workflow_dispatch = manual "Run workflow" button, for testing.
+on:
+  schedule:
+    - cron: '0 4,16 * * *'
+  workflow_dispatch: {}
+
+# Least privilege: the worker talks to Supabase + eFundi, it does not touch the repo.
+permissions:
+  contents: read
+
+# Never let two runs overlap (they'd both write the same rows).
+concurrency:
+  group: efundi-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: sync
+        run: npm install --no-audit --no-fund
+      - name: Run sync
+        working-directory: sync
+        env:
+          EFUNDI_USERNAME: ${{ secrets.EFUNDI_USERNAME }}
+          EFUNDI_PASSWORD: ${{ secrets.EFUNDI_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node index.js
