@@ -14,9 +14,16 @@
 const EFUNDI = 'https://efundi.nwu.ac.za';
 
 async function getJson(client, path) {
-  const res = await client.get(`${EFUNDI}${path}`, { timeout: { request: 30000 } });
-  if (res.statusCode !== 200) return null;
-  try { return JSON.parse(res.body); } catch { return null; }   // HTML/error page -> null
+  // Non-fatal: a slow/failed endpoint yields null (-> [] upstream), never crashes the run.
+  // eFundi can be slow, so allow 60s.
+  try {
+    const res = await client.get(`${EFUNDI}${path}`, { timeout: { request: 60000 } });
+    if (res.statusCode !== 200) { console.warn(`    fetch ${path} -> HTTP ${res.statusCode}`); return null; }
+    return JSON.parse(res.body);              // HTML/error page -> caught below
+  } catch (e) {
+    console.warn(`    fetch ${path} failed: ${e.message}`);
+    return null;
+  }
 }
 
 function absoluteUrl(u) {

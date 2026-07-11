@@ -41,23 +41,29 @@ async function main() {
     const sites = await listSites(client);
     console.log(`eFundi reports ${sites.length} site(s); ${siteMap.size} mapped.`);
 
+    let hadError = false;
     for (const site of sites) {
       const moduleId = siteMap.get(site.id);
       if (!moduleId) { console.log(`  · skip (unmapped): ${site.title} [${site.id}]`); continue; }
       console.log(`  → syncing: ${site.title}`);
-
-      const [anns, asgs, files] = await Promise.all([
-        fetchSiteAnnouncements(client, site.id),
-        fetchSiteAssignments(client, site.id),
-        fetchSiteContent(client, site.id),
-      ]);
-      await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
-      await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
-      await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);
+      try {
+        const [anns, asgs, files] = await Promise.all([
+          fetchSiteAnnouncements(client, site.id),
+          fetchSiteAssignments(client, site.id),
+          fetchSiteContent(client, site.id),
+        ]);
+        await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
+        await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
+        await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);
+      } catch (e) {
+        // One bad site shouldn't sink the run — log it, mark partial, keep going.
+        hadError = true;
+        console.error(`    ! ${site.title} failed: ${e?.message ?? e}`);
+      }
     }
 
     await sb.from('efundi_sync_runs').update({
-      finished_at: new Date().toISOString(), status: 'ok',
+      finished_at: new Date().toISOString(), status: hadError ? 'partial' : 'ok',
       items_new: counters.new, items_updated: counters.updated,
     }).eq('id', runId);
     console.log(`✓ Done. New: ${counters.new}, Updated: ${counters.updated}.`);
