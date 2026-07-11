@@ -4,7 +4,7 @@
 // and NEVER retries. Any other error records 'error'. The run row is always closed.
 
 import { login, AuthError } from './auth.js';
-import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, diagnoseSite } from './fetch-efundi.js';
+import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
   makeSupabase, resolveOwner, loadSiteMap, existingHashes,
   syncAnnouncements, syncAssignments, syncContent, purgeVideos,
@@ -55,9 +55,16 @@ async function main() {
           fetchSiteAnnouncements(client, site.id),
           fetchSiteAssignments(client, site.id),
         ]);
-        const files = await fetchSiteContent(client, site.id);
-        // If a site's Resources tool is empty, its materials may live in the Lessons tool — probe.
-        if (files.length === 0) { console.log(`    (no files in Resources for ${site.title}; probing other tools)`); await diagnoseSite(client, site.id); }
+        // Files can live in the Resources tool and/or embedded in Lessons pages — gather both,
+        // dedupe by the file's sakaiId (Resources entry wins; it carries size for edit-detection).
+        const [resFiles, lessonFiles] = await Promise.all([
+          fetchSiteContent(client, site.id),
+          fetchSiteLessons(client, site.id),
+        ]);
+        const byId = new Map();
+        for (const f of [...resFiles, ...lessonFiles]) if (f.sourceId && !byId.has(f.sourceId)) byId.set(f.sourceId, f);
+        const files = [...byId.values()];
+        if (lessonFiles.length) console.log(`    (${lessonFiles.length} file(s) from Lessons; ${resFiles.length} from Resources)`);
         await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
         await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
         await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);

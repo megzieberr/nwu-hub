@@ -95,21 +95,47 @@ export function isVideo(mime, ...names) {
   return names.some(n => typeof n === 'string' && VIDEO_RE.test(n));
 }
 
-// TEMP diagnostic: dump the Lessons-tool structure so we can see how a lesson references its
-// embedded files (workbook/textbook/etc.) and design the real Lessons sync.
-export async function diagnoseSite(client, siteId) {
-  try {
-    const res = await client.get(`${EFUNDI}/direct/lessons/site/${siteId}.json`, { timeout: { request: 30000 } });
-    const lessons = (JSON.parse(res.body)?.lessons_collection) ?? [];
-    console.log(`    [diag] lessons_collection: ${lessons.length} lesson(s)`);
-    for (const L of lessons.slice(0, 8)) {
-      console.log(`    [diag] lesson id=${L.id} title=${JSON.stringify(L.lessonTitle)}`);
-      try {
-        const r2 = await client.get(`${EFUNDI}/direct/lessons/lesson/${L.id}.json`, { timeout: { request: 30000 } });
-        console.log(`    [diag]   items: ${String(r2.body || '').replace(/\s+/g, ' ').slice(0, 600)}`);
-      } catch (e) { console.log(`    [diag]   items ERR ${e.message}`); }
+// Some modules (e.g. ALDE122) deliver materials through the Lessons tool instead of Resources.
+// Walk every lesson page and pull the embedded ContentHosting files (workbook/textbook/guides).
+//   /direct/lessons/site/{siteId}.json      -> lessons_collection (each: id, lessonTitle)
+//   /direct/lessons/lesson/{lessonId}.json  -> { contentsList: [ { sakaiId, name, type, url } ] }
+// A real file is an item whose sakaiId is a ContentHosting path (/group|/private|/attachment/...).
+// sourceId is the sakaiId itself — the SAME scheme fetchSiteContent uses — so a file that appears
+// in both tools dedupes to one row (see index.js merge) instead of fighting over it.
+export async function fetchSiteLessons(client, siteId) {
+  const site = await getJson(client, `/direct/lessons/site/${siteId}.json`, { timeout: 60000 });
+  const lessons = site?.lessons_collection ?? [];
+  const out = [];
+  const seen = new Set();
+  for (const L of lessons) {
+    const page = await getJson(client, `/direct/lessons/lesson/${L.id}.json`, { timeout: 60000 });
+    for (const it of (page?.contentsList ?? [])) {
+      const sid = typeof it.sakaiId === 'string' ? it.sakaiId : '';
+      if (!/^\/(group|private|attachment)\//.test(sid)) continue;   // embedded file only
+      if (seen.has(sid)) continue;
+      seen.add(sid);
+      const title = it.name || decodeURIComponent(sid.split('/').pop() || '') || 'file';
+      out.push({
+        sourceId: sid,
+        title,
+        mime: mimeFromName(title),
+        size: null,                    // not exposed by the Lessons API; buf.length used after download
+        lastModified: null,
+        url: `${EFUNDI}/access/content` + sid.split('/').map(encodeURIComponent).join('/'),
+      });
     }
-  } catch (e) { console.log(`    [diag] lessons probe ERR ${e.message}`); }
+  }
+  return out.filter(f => !isVideo(f.mime, f.title, f.url));
+}
+
+function mimeFromName(name = '') {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  return {
+    pdf: 'application/pdf', doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  }[ext] || null;
 }
 
 function numOrNull(v) {
