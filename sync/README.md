@@ -34,21 +34,29 @@ GitHub → your `nwu-hub` repo → **Settings → Secrets and variables → Acti
 ⚠️ The `service_role` key bypasses all security — it lives **only** here in Actions Secrets,
 never in the app, the repo, or `.env` committed anywhere.
 
-### 2. Map at least one course
-The worker refuses to sync a site it hasn't been told maps to a module. Get a course's
-Sakai site id from its URL (open the course in eFundi → the address bar shows
-`.../portal/site/`**`<uuid>`**), then in the Supabase SQL editor:
+### 2. Course ↔ module mapping (mostly automatic)
+The worker only syncs sites listed in `efundi_site_map` — but it now **maps new module
+sites itself**: each run, any enrolled site whose title contains an unmapped module's code
+("MATV121-2026", "MATH 121 PED") is added to the map automatically and synced in that same
+run (look for `✚ auto-mapped:` in the log). So when a lecturer finally opens a course site,
+nothing needs doing.
+
+Auto-mapping is deliberately conservative — it maps NOTHING for a module when:
+- the module already has any mapping (even one deactivated with `active=false` — that means
+  "leave it alone"), or
+- two or more unmapped sites match the same code in one run (e.g. a PAL/tutorial site also
+  carries it). The candidates are printed in the log; map the right one manually:
 
 ```sql
 insert into public.efundi_site_map (owner, efundi_site_id, module_id, title_snapshot)
-select m.owner, '<sakai-site-uuid>', m.id, 'EDCC125'
+select m.owner, '<sakai-site-uuid>', m.id, '<site title>'
 from public.modules m
-where m.code = 'EDCC125'
+where m.code = 'MATH121'
 on conflict (owner, efundi_site_id) do update
   set module_id = excluded.module_id, title_snapshot = excluded.title_snapshot;
 ```
 
-Repeat per module (or leave a site out to skip it).
+(The site uuid is in the course's address bar: `.../portal/site/`**`<uuid>`**.)
 
 ### 3. Test it
 GitHub → **Actions → eFundi sync → Run workflow** (the `workflow_dispatch` button).

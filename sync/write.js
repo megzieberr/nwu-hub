@@ -60,6 +60,48 @@ export async function loadSiteMap(sb) {
   return map;
 }
 
+// autoMapSites — map newly-visible eFundi sites to modules by title, so a lecturer opening a
+// course site mid-semester starts syncing on the next run with ZERO manual steps.
+// NWU names course sites with the module code in the title ("EDCC125", "ENGV121-2026",
+// "ALDE122 Distance 2026"), so a code match is reliable — with guards:
+//   • never touches an efundi_site_map row that already exists (active OR deliberately
+//     deactivated — an active=false row means "leave this site alone", not "remap it");
+//   • one site per module: if a module already has ANY mapping, or if 2+ unmapped sites match
+//     the same module in one run (e.g. a PAL/tutorial site also carries the code), it maps
+//     nothing for that module and logs the candidates for a manual pick;
+//   • matches the code as a whole word, tolerating an optional space ("MATH121" / "MATH 121").
+// Mutates `siteMap` in place so the newly-mapped site syncs in THIS run.
+export async function autoMapSites(sb, owner, sites, siteMap) {
+  const [{ data: mods, error: mErr }, { data: allRows, error: rErr }] = await Promise.all([
+    sb.from('modules').select('id, code').eq('owner', owner),
+    sb.from('efundi_site_map').select('efundi_site_id, module_id'),   // ALL rows, incl. inactive
+  ]);
+  if (mErr || rErr) { console.warn(`  auto-map: load failed: ${(mErr ?? rErr).message}`); return; }
+
+  const knownSites = new Set((allRows ?? []).map(r => r.efundi_site_id));
+  const mappedModules = new Set((allRows ?? []).map(r => r.module_id).filter(Boolean));
+
+  // module -> unmapped sites whose title carries its code
+  for (const m of mods ?? []) {
+    if (mappedModules.has(m.id)) continue;
+    const re = new RegExp(`\\b${m.code.replace(/(\d)/, ' ?$1')}\\b`, 'i');   // "MATH ?121"
+    const hits = sites.filter(s => !knownSites.has(s.id) && re.test(s.title ?? ''));
+    if (!hits.length) continue;
+    if (hits.length > 1) {
+      console.warn(`  auto-map: ${m.code} matches ${hits.length} sites — map one manually:`);
+      for (const s of hits) console.warn(`      ${s.title} [${s.id}]`);
+      continue;
+    }
+    const site = hits[0];
+    const { error } = await sb.from('efundi_site_map').insert({
+      owner, efundi_site_id: site.id, module_id: m.id, title_snapshot: site.title,
+    });
+    if (error) { console.warn(`  auto-map: ${m.code} insert failed: ${error.message}`); continue; }
+    siteMap.set(site.id, m.id);
+    console.log(`  ✚ auto-mapped: ${site.title} [${site.id}] → ${m.code}`);
+  }
+}
+
 export async function existingHashes(sb, table) {
   const { data, error } = await sb.from(table).select('source_id, source_hash').eq('source', 'efundi');
   if (error) throw error;

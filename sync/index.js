@@ -6,7 +6,7 @@
 import { login, AuthError } from './auth.js';
 import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
-  makeSupabase, resolveOwner, loadSiteMap, existingHashes,
+  makeSupabase, resolveOwner, loadSiteMap, autoMapSites, existingHashes,
   syncAnnouncements, syncAssignments, syncContent, purgeVideos,
 } from './write.js';
 import { generateObjectives } from './objectives.js';
@@ -42,6 +42,10 @@ async function main() {
     ]);
 
     const sites = await listSites(client);
+    // Map any new module site by title before syncing, so it's picked up in this same run.
+    // Non-fatal: a failure here just means that site waits for a manual mapping.
+    try { await autoMapSites(sb, owner, sites, siteMap); }
+    catch (e) { console.warn(`  auto-map error (non-fatal): ${e?.message ?? e}`); }
     console.log(`eFundi reports ${sites.length} site(s); ${siteMap.size} mapped.`);
 
     let hadError = false;
