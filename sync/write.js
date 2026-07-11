@@ -89,39 +89,49 @@ export async function syncAssignments(sb, owner, moduleId, items, prev, counters
   }
 }
 
+// Supabase Storage rejects files over its per-file limit (~50MB). Skip anything near it —
+// giant files (recorded lectures, huge scans) don't belong mirrored in the hub anyway.
+const MAX_FILE_BYTES = 45 * 1024 * 1024;
+
 export async function syncContent(sb, client, owner, moduleId, items, prev, counters, now) {
   for (const it of items) {
     if (!it.sourceId || !it.url) continue;
     const h = hash({ n: it.title, s: it.size, m: it.lastModified });
     const before = prev.get(it.sourceId);
     if (before === h) continue;
-
-    // download the file from eFundi (authenticated) then upload to the private bucket
-    let buf;
-    try {
-      const res = await client.get(it.url, { responseType: 'buffer', timeout: { request: 120000 } });
-      if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`);
-      buf = res.body;
-    } catch (e) {
-      console.warn(`    file download failed (${it.title}): ${e.message} — skipping`);
+    if (it.size && it.size > MAX_FILE_BYTES) {
+      console.warn(`    skip large file (${(it.size / 1048576).toFixed(1)}MB): ${it.title}`);
       continue;
     }
 
-    const path = `efundi/${moduleId}/${storageKey(it.sourceId, it.title)}`;
-    const up = await sb.storage.from('resources').upload(path, buf, {
-      upsert: true, contentType: it.mime || 'application/octet-stream',
-    });
-    if (up.error) throw up.error;
+    // Everything for one file is isolated: a failed download/upload skips that file only.
+    try {
+      const res = await client.get(it.url, { responseType: 'buffer', timeout: { request: 120000 } });
+      if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`);
+      const buf = res.body;
+      if (buf.length > MAX_FILE_BYTES) {
+        console.warn(`    skip large file (${(buf.length / 1048576).toFixed(1)}MB): ${it.title}`);
+        continue;
+      }
 
-    const kind = (it.mime || '').includes('pdf') ? 'course_pdf' : 'other';
-    const { error } = await sb.from('resources').upsert({
-      owner, module_id: moduleId, kind, title: it.title, storage_path: path,
-      size_bytes: it.size ?? buf.length,
-      source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
-    }, { onConflict: 'source,source_id' });
-    if (error) throw error;
-    before === undefined ? counters.new++ : counters.updated++;
-    prev.set(it.sourceId, h);
+      const path = `efundi/${moduleId}/${storageKey(it.sourceId, it.title)}`;
+      const up = await sb.storage.from('resources').upload(path, buf, {
+        upsert: true, contentType: it.mime || 'application/octet-stream',
+      });
+      if (up.error) throw up.error;
+
+      const kind = (it.mime || '').includes('pdf') ? 'course_pdf' : 'other';
+      const { error } = await sb.from('resources').upsert({
+        owner, module_id: moduleId, kind, title: it.title, storage_path: path,
+        size_bytes: it.size ?? buf.length,
+        source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
+      }, { onConflict: 'source,source_id' });
+      if (error) throw error;
+      before === undefined ? counters.new++ : counters.updated++;
+      prev.set(it.sourceId, h);
+    } catch (e) {
+      console.warn(`    file failed (${it.title}): ${e.message}`);
+    }
   }
 }
 
