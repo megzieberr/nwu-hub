@@ -9,6 +9,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
     "@supabase/supabase-js": "^2.45.4",
     "cheerio": "^1.0.0",
     "got": "^14.4.2",
