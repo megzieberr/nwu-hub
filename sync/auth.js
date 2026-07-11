@@ -84,6 +84,20 @@ export async function login({ username, password }) {
   let userEid = null;
   try { userEid = JSON.parse(check.body)?.session_collection?.[0]?.userId ?? null; } catch { /* not JSON */ }
   console.log(`[auth] session.json -> ${check.statusCode}; userId=${userEid ?? 'null'}`);
+
+  if (!userEid) {
+    // --- diagnostics (temporary) ---
+    const cookiesFor = (u) => cookieJar.getCookiesSync(u).map(c => `${c.key}(path=${c.path};dom=${c.domain})`).join(', ') || '(none)';
+    console.log(`[auth] cookies for /portal : ${cookiesFor('https://efundi.nwu.ac.za/portal')}`);
+    console.log(`[auth] cookies for /direct : ${cookiesFor('https://efundi.nwu.ac.za/direct/session.json')}`);
+    console.log(`[auth] session.json body[0:280]: ${(check.body || '').replace(/\s+/g, ' ').slice(0, 280)}`);
+    const portalAuthed = /Logout|logout/.test(posted.body || '');
+    console.log(`[auth] /portal shows a Logout control: ${portalAuthed}`);
+    const site = await client.get('https://efundi.nwu.ac.za/direct/site.json');
+    let nSites = null; try { nSites = JSON.parse(site.body)?.site_collection?.length; } catch {}
+    console.log(`[auth] site.json -> ${site.statusCode}; sites=${nSites}`);
+  }
+
   if (!userEid)
     throw new AuthError('Login did not establish a Sakai session — wrong credentials, or still on the login page.');
 
