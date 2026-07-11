@@ -13,17 +13,21 @@
 
 const EFUNDI = 'https://efundi.nwu.ac.za';
 
-async function getJson(client, path) {
+async function getJson(client, path, { timeout = 60000, retries = 0 } = {}) {
   // Non-fatal: a slow/failed endpoint yields null (-> [] upstream), never crashes the run.
-  // eFundi can be slow, so allow 60s.
-  try {
-    const res = await client.get(`${EFUNDI}${path}`, { timeout: { request: 60000 } });
-    if (res.statusCode !== 200) { console.warn(`    fetch ${path} -> HTTP ${res.statusCode}`); return null; }
-    return JSON.parse(res.body);              // HTML/error page -> caught below
-  } catch (e) {
-    console.warn(`    fetch ${path} failed: ${e.message}`);
-    return null;
+  // eFundi is flaky under load, so slow/heavy endpoints (content) get a longer budget + a retry.
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await client.get(`${EFUNDI}${path}`, { timeout: { request: timeout } });
+      if (res.statusCode !== 200) { console.warn(`    fetch ${path} -> HTTP ${res.statusCode}`); return null; }
+      return JSON.parse(res.body);            // HTML/error page -> caught below
+    } catch (e) {
+      const willRetry = attempt < retries;
+      console.warn(`    fetch ${path} failed (attempt ${attempt + 1}/${retries + 1}): ${e.message}${willRetry ? ' — retrying' : ''}`);
+      if (!willRetry) return null;
+    }
   }
+  return null;
 }
 
 function absoluteUrl(u) {
@@ -67,7 +71,9 @@ function assignmentDueDate(a) {
 }
 
 export async function fetchSiteContent(client, siteId) {
-  const data = await getJson(client, `/direct/content/site/${siteId}.json`);
+  // The content listing is the heaviest /direct response and the first to time out when eFundi
+  // is slow — give it a longer budget and one retry (observed: 60s single-shot fails under load).
+  const data = await getJson(client, `/direct/content/site/${siteId}.json`, { timeout: 120000, retries: 1 });
   return (data?.content_collection ?? [])
     .filter(c => !isCollection(c))     // keep files only; skip folders/collections
     .map(c => ({
