@@ -25,9 +25,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'   # supabase-js v2 needs Node 22+ (global WebSocket)
+          cache: npm
+          cache-dependency-path: sync/package-lock.json
       - name: Install deps
         working-directory: sync
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund   # lockfile-frozen, reproducible for an unattended job
       - name: Run sync
         working-directory: sync
         env:
