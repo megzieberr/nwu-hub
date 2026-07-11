@@ -73,7 +73,7 @@ function assignmentDueDate(a) {
 export async function fetchSiteContent(client, siteId) {
   // The content listing is the heaviest /direct response and the first to time out when eFundi
   // is slow — give it a longer budget and one retry (observed: 60s single-shot fails under load).
-  const data = await getJson(client, `/direct/content/site/${siteId}.json`, { timeout: 120000, retries: 1 });
+  const data = await getJson(client, `/direct/content/site/${siteId}.json`, { timeout: 150000, retries: 1 });
   return (data?.content_collection ?? [])
     .filter(c => !isCollection(c))     // keep files only; skip folders/collections
     .map(c => ({
@@ -95,24 +95,21 @@ export function isVideo(mime, ...names) {
   return names.some(n => typeof n === 'string' && VIDEO_RE.test(n));
 }
 
-// TEMP diagnostic: for a site whose Resources tool is empty (e.g. ALDE122, which delivers content
-// via the Lessons tool), probe candidate endpoints and log what responds, to design Lessons sync.
+// TEMP diagnostic: dump the Lessons-tool structure so we can see how a lesson references its
+// embedded files (workbook/textbook/etc.) and design the real Lessons sync.
 export async function diagnoseSite(client, siteId) {
-  const paths = [
-    `/direct/content/site/${siteId}.json`,
-    `/direct/lessons/site/${siteId}.json`,
-    `/direct/lessonbuilder/site/${siteId}.json`,
-    `/direct/site/${siteId}/pages.json`,
-    `/direct/lessons/describe`,
-  ];
-  for (const p of paths) {
-    try {
-      const res = await client.get(`${EFUNDI}${p}`, { timeout: { request: 30000 } });
-      console.log(`    [diag] ${p} -> ${res.statusCode} :: ${String(res.body || '').replace(/\s+/g, ' ').slice(0, 200)}`);
-    } catch (e) {
-      console.log(`    [diag] ${p} -> ERR ${e.message}`);
+  try {
+    const res = await client.get(`${EFUNDI}/direct/lessons/site/${siteId}.json`, { timeout: { request: 30000 } });
+    const lessons = (JSON.parse(res.body)?.lessons_collection) ?? [];
+    console.log(`    [diag] lessons_collection: ${lessons.length} lesson(s)`);
+    for (const L of lessons.slice(0, 8)) {
+      console.log(`    [diag] lesson id=${L.id} title=${JSON.stringify(L.lessonTitle)}`);
+      try {
+        const r2 = await client.get(`${EFUNDI}/direct/lessons/lesson/${L.id}.json`, { timeout: { request: 30000 } });
+        console.log(`    [diag]   items: ${String(r2.body || '').replace(/\s+/g, ' ').slice(0, 600)}`);
+      } catch (e) { console.log(`    [diag]   items ERR ${e.message}`); }
     }
-  }
+  } catch (e) { console.log(`    [diag] lessons probe ERR ${e.message}`); }
 }
 
 function numOrNull(v) {
