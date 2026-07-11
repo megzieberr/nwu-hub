@@ -125,6 +125,7 @@ function Dashboard({ isViewer, onOpenModule }) {
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
   const [goals, setGoals] = useState([])
+  const [showDone, setShowDone] = useState(false)
   const [lastSync, setLastSync] = useState(null)
   const [error, setError] = useState('')
 
@@ -139,8 +140,8 @@ function Dashboard({ isViewer, onOpenModule }) {
       setModules(m.data || [])
       setDeadlines(a.data || [])
       // Personal study goals are owner-only — a read-only viewer never sees this section.
-      // Fetch done ones too so a just-ticked objective stays visible (struck through) and
-      // can be un-ticked if it was a mistake; not-done first, then by target date.
+      // Done ones are fetched too but hidden by default (tucked under the "Done" tab so a
+      // mistaken tick can be undone); active ones show, ordered by target date.
       if (!isViewer) {
         const g = await supabase.from('goals').select('*')
           .order('done').order('target_date', { nullsFirst: false })
@@ -225,34 +226,55 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </Section>
 
-        {!isViewer && (
-          <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
-            <div className="panel">
-              {goals.map((g) => (
-                <div className="row" key={g.id} style={{ gap: 12 }}>
-                  <button
-                    onClick={() => toggleGoal(g)}
-                    aria-label={g.done ? 'Mark not done' : 'Mark done'}
-                    style={{
-                      flex: '0 0 auto', width: 22, height: 22, borderRadius: 6,
-                      border: `2px solid ${g.done ? 'var(--cyan)' : 'var(--line-strong)'}`,
-                      background: g.done ? 'var(--cyan)' : 'transparent',
-                      color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px',
-                      cursor: 'pointer',
-                    }}
-                  >{g.done ? '✓' : ''}</button>
-                  <span style={{
-                    flex: 1, minWidth: 0,
-                    color: g.done ? 'var(--muted)' : 'var(--text)',
-                    textDecoration: g.done ? 'line-through' : 'none',
-                  }}>{g.text}</span>
-                  {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
+        {!isViewer && (() => {
+          const active = goals.filter((g) => !g.done)
+          const done = goals.filter((g) => g.done)
+          return (
+            <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
+              <div className="panel">
+                {active.length
+                  ? active.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)
+                  : <div className="row"><span className="muted text-sm">All clear — nothing outstanding.</span></div>}
+              </div>
+              {done.length > 0 && (
+                <div className="mt-3">
+                  <button onClick={() => setShowDone((v) => !v)} className="btn small ghost"
+                    aria-expanded={showDone}
+                    style={{ borderColor: 'var(--line-strong)', color: 'var(--muted)' }}>
+                    {showDone ? '▾' : '▸'} Objectives Done ({done.length})
+                  </button>
+                  {showDone && (
+                    <div className="panel mt-2" style={{ opacity: 0.9 }}>
+                      {done.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)}
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          </Section>
-        )}
+              )}
+            </Section>
+          )
+        })()}
       </main>
+    </div>
+  )
+}
+
+// One objective row. Ticking it moves it out of the active list (vanishes) into the "Done"
+// tab — no strike-through, no pile-up. Untick from the Done tab to bring it back.
+function ObjectiveRow({ g, onToggle }) {
+  return (
+    <div className="row" style={{ gap: 12 }}>
+      <button
+        onClick={() => onToggle(g)}
+        aria-label={g.done ? 'Mark not done' : 'Mark done'}
+        style={{
+          flex: '0 0 auto', width: 22, height: 22, borderRadius: 6,
+          border: `2px solid ${g.done ? 'var(--cyan)' : 'var(--line-strong)'}`,
+          background: g.done ? 'var(--cyan)' : 'transparent',
+          color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px', cursor: 'pointer',
+        }}
+      >{g.done ? '✓' : ''}</button>
+      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>{g.text}</span>
+      {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
     </div>
   )
 }
