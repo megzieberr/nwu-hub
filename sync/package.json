@@ -4,7 +4,7 @@
   "type": "module",
   "version": "1.0.0",
   "description": "eFundi -> NWU Study Hub sync worker. Runs twice daily in GitHub Actions. Not part of the Vite build.",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "start": "node index.js"
   },
