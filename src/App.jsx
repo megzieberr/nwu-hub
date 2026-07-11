@@ -61,6 +61,44 @@ function syncStatusColour(status) {
   return 'var(--cyan)'
 }
 
+// The sync fails SILENTLY by design (no push, no email) — this banner is the one loud surface.
+// Two triggers: the last run failed outright, or no run has landed in >26h (schedule is every
+// 12h; 26h = both daily runs missed even allowing for GitHub's best-effort cron drift). The
+// stale case matters most: a dead schedule writes NO run rows, so only the clock can catch it.
+const SYNC_STALE_MS = 26 * 60 * 60 * 1000
+export function syncProblem(lastSync, now = Date.now()) {
+  if (!lastSync) return null
+  if (lastSync.status === 'auth_failed') return 'auth'
+  if (lastSync.status === 'error') return 'error'
+  const t = new Date(lastSync.finished_at || lastSync.started_at).getTime()
+  if (!isNaN(t) && now - t > SYNC_STALE_MS) return 'stale'
+  return null
+}
+
+function SyncAlert({ lastSync }) {
+  const problem = syncProblem(lastSync)
+  if (!problem) return null
+  const when = timeAgo(lastSync.finished_at || lastSync.started_at)
+  const colour = problem === 'stale' ? '#f0b232' : 'var(--red)'
+  return (
+    <div className="panel p-4 text-sm" style={{ borderColor: colour, color: colour }}>
+      {problem === 'auth' && (
+        <>⚠️ <b>eFundi sync can't log in</b> (last try {when}) — your NWU password probably changed.
+          Update the <span className="mono">EFUNDI_PASSWORD</span> secret (GitHub → nwu-hub → Settings →
+          Secrets → Actions), then re-run the sync from the Actions tab. New eFundi posts are NOT arriving.</>
+      )}
+      {problem === 'error' && (
+        <>⚠️ <b>eFundi sync failed</b> on its last run ({when}) — check the log: GitHub → nwu-hub →
+          Actions → eFundi sync. New eFundi posts may not be arriving.</>
+      )}
+      {problem === 'stale' && (
+        <>⚠️ <b>eFundi sync hasn't run since {when}</b> — the schedule may be stuck or disabled.
+          Check GitHub → nwu-hub → Actions (a green manual "Run workflow" clears this).</>
+      )}
+    </div>
+  )
+}
+
 function Header({ children, onBack }) {
   return (
     <header style={{ borderBottom: '1px solid var(--line)', background: 'rgba(5,7,15,0.55)', backdropFilter: 'blur(6px)' }}>
@@ -171,6 +209,7 @@ function Dashboard({ isViewer, onOpenModule }) {
     <div className="min-h-screen">
       <Header />
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
+        <SyncAlert lastSync={lastSync} />
         {error && (
           <div className="panel p-4 text-sm" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
             {error} — if this mentions a missing table, the schema hasn't been run yet.
