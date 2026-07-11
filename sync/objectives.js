@@ -14,11 +14,21 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const MODEL = 'claude-haiku-4-5';   // user-chosen for cost; supports structured outputs
 
-const SYSTEM = `You turn a university course announcement into concrete study objectives for a student.
-Create a goal ONLY when the announcement implies an action the student should take (prepare, submit,
-review, register, attend, complete). For pure information, greetings, or FYI notices, return an empty list.
-Each goal: short, specific, actionable, max ~12 words, phrased as a task ("Submit Assignment 1", "Prep for Test 2").
-If a clear deadline date is stated, set target_date to it as YYYY-MM-DD; otherwise null. Never invent dates.
+const SYSTEM = `You read a university course announcement and decide whether it contains something the
+student must ACT on. Be strict — most announcements are not objectives, and a graveyard of trivial
+goals is worse than none.
+
+Create a goal ONLY for:
+  • a task the student must do (prepare, submit, register, complete, attend), or
+  • a scheduled class / test / session that has a specific date (include the time if given).
+
+Return an EMPTY list for everything else: general reminders, FYI notices, greetings, encouragement,
+clarifications about content, or anything that has already passed. These are NOT objectives — the
+announcement is still kept on file for the student's AI tutor to reference, so never force a goal.
+
+Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submit Assignment 1",
+"Register for Test 2"). Classes/sessions include the date and time ("Online class Mon 14 Jul, 09:00").
+If a clear date is stated set target_date to it (YYYY-MM-DD); otherwise null. Never invent dates.
 Return at most 3 goals.`;
 
 const SCHEMA = {
