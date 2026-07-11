@@ -9,6 +9,7 @@ import {
   makeSupabase, resolveOwner, loadSiteMap, existingHashes,
   syncAnnouncements, syncAssignments, syncContent, purgeVideos,
 } from './write.js';
+import { generateObjectives } from './objectives.js';
 
 async function main() {
   const sb = makeSupabase();
@@ -74,6 +75,11 @@ async function main() {
         console.error(`    ! ${site.title} failed: ${e?.message ?? e}`);
       }
     }
+
+    // Processing layer: turn the announcements we just stored into study objectives.
+    // Non-fatal — a failure here never fails the sync (the raw data is already saved).
+    try { await generateObjectives(sb); }
+    catch (e) { console.warn(`  objectives agent error (non-fatal): ${e?.message ?? e}`); }
 
     await sb.from('efundi_sync_runs').update({
       finished_at: new Date().toISOString(), status: hadError ? 'partial' : 'ok',

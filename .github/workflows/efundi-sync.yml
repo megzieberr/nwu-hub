@@ -37,4 +37,6 @@ jobs:
           EFUNDI_PASSWORD: ${{ secrets.EFUNDI_PASSWORD }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Optional: enables the announcements -> objectives agent. Absent = agent skipped.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node index.js
