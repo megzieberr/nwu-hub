@@ -22,6 +22,27 @@ export function hash(obj) {
   return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
 }
 
+const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpe?g|3gp|ogv|ts)$/i;
+
+// Enforce "no videos in the hub": remove any eFundi-sourced video files (storage object + row).
+// Scoped to source='efundi' so the owner's own manual uploads are never touched. Runs each sync
+// as a cheap invariant (no-op once clean) — a belt-and-suspenders alongside the fetch-side skip.
+export async function purgeVideos(sb) {
+  const { data, error } = await sb.from('resources').select('id, storage_path, title').eq('source', 'efundi');
+  if (error) { console.warn(`purgeVideos: ${error.message}`); return 0; }
+  const vids = (data ?? []).filter(r => VIDEO_RE.test(r.title || '') || VIDEO_RE.test(r.storage_path || ''));
+  if (!vids.length) return 0;
+  const paths = vids.map(r => r.storage_path).filter(Boolean);
+  if (paths.length) {
+    const { error: se } = await sb.storage.from('resources').remove(paths);
+    if (se) console.warn(`purgeVideos storage remove: ${se.message}`);
+  }
+  const { error: de } = await sb.from('resources').delete().in('id', vids.map(r => r.id));
+  if (de) { console.warn(`purgeVideos row delete: ${de.message}`); return 0; }
+  console.log(`  purged ${vids.length} video file(s) from the hub.`);
+  return vids.length;
+}
+
 // Resolve the owner uid without touching auth admin: every module row is Megan's.
 export async function resolveOwner(sb) {
   const { data, error } = await sb.from('modules').select('owner').limit(1).single();

@@ -4,10 +4,10 @@
 // and NEVER retries. Any other error records 'error'. The run row is always closed.
 
 import { login, AuthError } from './auth.js';
-import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent } from './fetch-efundi.js';
+import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, diagnoseSite } from './fetch-efundi.js';
 import {
   makeSupabase, resolveOwner, loadSiteMap, existingHashes,
-  syncAnnouncements, syncAssignments, syncContent,
+  syncAnnouncements, syncAssignments, syncContent, purgeVideos,
 } from './write.js';
 
 async function main() {
@@ -27,6 +27,8 @@ async function main() {
       password: process.env.EFUNDI_PASSWORD,
     });
     console.log('✓ Authenticated to eFundi.');
+
+    await purgeVideos(sb);   // enforce "no videos in the hub" before anything else
 
     const siteMap = await loadSiteMap(sb);
     if (siteMap.size === 0)
@@ -54,6 +56,8 @@ async function main() {
           fetchSiteAssignments(client, site.id),
         ]);
         const files = await fetchSiteContent(client, site.id);
+        // If a site's Resources tool is empty, its materials may live in the Lessons tool — probe.
+        if (files.length === 0) { console.log(`    (no files in Resources for ${site.title}; probing other tools)`); await diagnoseSite(client, site.id); }
         await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);
         await syncAssignments(sb, owner, moduleId, asgs, prevAsg, counters, now);
         await syncContent(sb, client, owner, moduleId, files, prevRes, counters, now);

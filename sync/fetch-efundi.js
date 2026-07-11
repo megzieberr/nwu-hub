@@ -83,7 +83,36 @@ export async function fetchSiteContent(client, siteId) {
       size: numOrNull(c.size ?? c.contentLength),
       lastModified: c.lastModified ?? c.modifiedDate ?? null,
       url: absoluteUrl(c.url),
-    }));
+    }))
+    // Never mirror videos — the owner transcribes the relevant ones by hand, so a copy in the
+    // hub is pure waste (and they're big). Skip by mime OR extension.
+    .filter(f => !isVideo(f.mime, f.title, f.url));
+}
+
+export const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpe?g|3gp|ogv|ts)$/i;
+export function isVideo(mime, ...names) {
+  if (typeof mime === 'string' && mime.toLowerCase().startsWith('video/')) return true;
+  return names.some(n => typeof n === 'string' && VIDEO_RE.test(n));
+}
+
+// TEMP diagnostic: for a site whose Resources tool is empty (e.g. ALDE122, which delivers content
+// via the Lessons tool), probe candidate endpoints and log what responds, to design Lessons sync.
+export async function diagnoseSite(client, siteId) {
+  const paths = [
+    `/direct/content/site/${siteId}.json`,
+    `/direct/lessons/site/${siteId}.json`,
+    `/direct/lessonbuilder/site/${siteId}.json`,
+    `/direct/site/${siteId}/pages.json`,
+    `/direct/lessons/describe`,
+  ];
+  for (const p of paths) {
+    try {
+      const res = await client.get(`${EFUNDI}${p}`, { timeout: { request: 30000 } });
+      console.log(`    [diag] ${p} -> ${res.statusCode} :: ${String(res.body || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+    } catch (e) {
+      console.log(`    [diag] ${p} -> ERR ${e.message}`);
+    }
+  }
 }
 
 function numOrNull(v) {
