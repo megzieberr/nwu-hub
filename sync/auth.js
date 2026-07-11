@@ -64,42 +64,26 @@ export async function login({ username, password }) {
   const postUrl = new URL(action, page.url).toString();
   console.log(`[auth] GET login -> ${page.statusCode}; form action=${postUrl}; fields=${Object.keys(fields).join(',')}`);
 
-  // 2. POST credentials; got follows the 302 -> service?ticket -> Sakai chain,
-  //    collecting JSESSIONID + haproxy cookies into the jar.
+  // 2. POST credentials; got (methodRewriting) follows 302 -> service?ticket -> Sakai,
+  //    collecting the authenticated JSESSIONID + haproxy cookies into the jar.
   const posted = await client.post(postUrl, {
     form: fields,
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
   });
-  const chain = (posted.redirectUrls ?? []).map(String).join(' -> ') || '(no redirects)';
-  const stillOnLogin = /name=["']?password/i.test(posted.body || '');
-  console.log(`[auth] POST -> ${posted.statusCode}; final=${posted.url}`);
-  console.log(`[auth] redirects: ${chain}`);
-  console.log(`[auth] still on login page after POST: ${stillOnLogin}`);
-
-  // 3. Prove we are authenticated
-  const check = await client.get('https://efundi.nwu.ac.za/direct/session.json');
-  if ((check.url || '').includes('login.microsoftonline.com'))
+  if ((posted.url || '').includes('login.microsoftonline.com'))
     throw new AuthError('Unexpected Microsoft 365 / MFA redirect — headless login is not viable (see plan Plan B).');
+  if (/name=["']?password/i.test(posted.body || ''))
+    throw new AuthError('Still on the CAS login page after POST — wrong credentials or a changed login form.');
 
-  let userEid = null;
-  try { userEid = JSON.parse(check.body)?.session_collection?.[0]?.userId ?? null; } catch { /* not JSON */ }
-  console.log(`[auth] session.json -> ${check.statusCode}; userId=${userEid ?? 'null'}`);
+  // 3. Confirm authentication with the user-scoped site list.
+  //    NB: /direct/session.json reports userId=null on this Sakai version even when logged
+  //    in, so it is NOT a reliable signal — the enrolled-site list is.
+  const site = await client.get('https://efundi.nwu.ac.za/direct/site.json');
+  let siteCount = 0;
+  try { siteCount = JSON.parse(site.body)?.site_collection?.length ?? 0; } catch { /* not JSON */ }
+  if (site.statusCode !== 200 || siteCount === 0)
+    throw new AuthError(`Login did not establish a Sakai session (site.json ${site.statusCode}, ${siteCount} sites) — check credentials.`);
 
-  if (!userEid) {
-    // --- diagnostics (temporary) ---
-    const cookiesFor = (u) => cookieJar.getCookiesSync(u).map(c => `${c.key}(path=${c.path};dom=${c.domain})`).join(', ') || '(none)';
-    console.log(`[auth] cookies for /portal : ${cookiesFor('https://efundi.nwu.ac.za/portal')}`);
-    console.log(`[auth] cookies for /direct : ${cookiesFor('https://efundi.nwu.ac.za/direct/session.json')}`);
-    console.log(`[auth] session.json body[0:280]: ${(check.body || '').replace(/\s+/g, ' ').slice(0, 280)}`);
-    const portalAuthed = /Logout|logout/.test(posted.body || '');
-    console.log(`[auth] /portal shows a Logout control: ${portalAuthed}`);
-    const site = await client.get('https://efundi.nwu.ac.za/direct/site.json');
-    let nSites = null; try { nSites = JSON.parse(site.body)?.site_collection?.length; } catch {}
-    console.log(`[auth] site.json -> ${site.statusCode}; sites=${nSites}`);
-  }
-
-  if (!userEid)
-    throw new AuthError('Login did not establish a Sakai session — wrong credentials, or still on the login page.');
-
-  return { client, cookieJar, userEid };
+  console.log(`[auth] authenticated; ${siteCount} sites visible.`);
+  return { client, cookieJar, userEid: username };
 }
