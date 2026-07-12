@@ -123,10 +123,16 @@ export async function fetchSiteLessons(client, siteId) {
   const lessons = site?.lessons_collection ?? [];
   const out = [];
   const seen = new Set();
-  for (const L of lessons) {
-    const page = await getJson(client, `/direct/lessons/lesson/${L.id}.json`, { timeout: 60000 });
-    for (const it of (page?.contentsList ?? [])) {
-      const sid = typeof it.sakaiId === 'string' ? it.sakaiId : '';
+
+  // Files can sit at ANY depth: lecturers who build Lessons out of subpages get those
+  // subpages INLINED into the lesson JSON as nested contentsList arrays (MATV121 keeps its
+  // study guides two levels down; a top-level-only walk sees just banners and separators).
+  // Depth cap guards against a pathological self-referencing page.
+  const walk = (items, depth = 0) => {
+    if (!Array.isArray(items) || depth > 10) return;
+    for (const it of items) {
+      if (Array.isArray(it?.contentsList)) walk(it.contentsList, depth + 1);   // inlined subpage
+      const sid = typeof it?.sakaiId === 'string' ? it.sakaiId : '';
       if (!/^\/(group|private|attachment)\//.test(sid)) continue;   // embedded file only
       if (seen.has(sid)) continue;
       seen.add(sid);
@@ -134,12 +140,17 @@ export async function fetchSiteLessons(client, siteId) {
       out.push({
         sourceId: sid,
         title,
-        mime: mimeFromName(title),
+        mime: it.contentType || mimeFromName(title),   // Lessons items carry contentType
         size: null,                    // not exposed by the Lessons API; buf.length used after download
         lastModified: null,
         url: `${EFUNDI}/access/content` + sid.split('/').map(encodeURIComponent).join('/'),
       });
     }
+  };
+
+  for (const L of lessons) {
+    const page = await getJson(client, `/direct/lessons/lesson/${L.id}.json`, { timeout: 60000 });
+    walk(page?.contentsList);
   }
   return out.filter(f => !isVideo(f.mime, f.title, f.url));
 }
