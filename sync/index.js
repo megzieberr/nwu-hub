@@ -7,7 +7,7 @@ import { login, AuthError } from './auth.js';
 import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
   makeSupabase, resolveOwner, loadSiteMap, loadSiteTitles, autoMapSites, existingHashes,
-  syncAnnouncements, syncAssignments, syncContent, purgeVideos,
+  syncAnnouncements, syncAssignments, syncContent, purgeVideos, purgeDuplicateResources,
 } from './write.js';
 import { generateObjectives } from './objectives.js';
 
@@ -30,6 +30,7 @@ async function main() {
     console.log('✓ Authenticated to eFundi.');
 
     await purgeVideos(sb);   // enforce "no videos in the hub" before anything else
+    await purgeDuplicateResources(sb);   // and "one row per document" (double-linked files)
 
     const siteMap = await loadSiteMap(sb);
     if (siteMap.size === 0)
@@ -81,8 +82,21 @@ async function main() {
           fetchSiteContent(client, site.id),
           fetchSiteLessons(client, site.id),
         ]);
+        // Lecturers sometimes link the SAME document twice under cosmetically different names
+        // (MATV121 has "MATV 121 Tutorial Task 7.pdf" AND a "MATV+121+…" upload artifact —
+        // distinct sakaiIds, identical content). Dedupe by normalized filename too, preferring
+        // the cleaner title (fewest '+'); the sort is stable, so Resources still wins ties.
+        const plusCount = t => (String(t).match(/\+/g) || []).length;
         const byId = new Map();
-        for (const f of [...resFiles, ...lessonFiles]) if (f.sourceId && !byId.has(f.sourceId)) byId.set(f.sourceId, f);
+        const byName = new Set();
+        const candidates = [...resFiles, ...lessonFiles].sort((a, b) => plusCount(a.title) - plusCount(b.title));
+        for (const f of candidates) {
+          if (!f.sourceId || byId.has(f.sourceId)) continue;
+          const nameKey = String(f.title).replace(/[+\s]+/g, ' ').trim().toLowerCase();
+          if (byName.has(nameKey)) { console.log(`    · same document linked twice on eFundi, skipped: ${f.title}`); continue; }
+          byId.set(f.sourceId, f);
+          byName.add(nameKey);
+        }
         const files = [...byId.values()];
         if (lessonFiles.length) console.log(`    (${lessonFiles.length} file(s) from Lessons; ${resFiles.length} from Resources)`);
         await syncAnnouncements(sb, owner, moduleId, anns, prevAnn, counters, now);

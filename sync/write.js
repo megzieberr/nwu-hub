@@ -43,6 +43,40 @@ export async function purgeVideos(sb) {
   return vids.length;
 }
 
+// Lecturers sometimes upload/link the same document twice under cosmetically different names
+// ("MATV 121 Tutorial Task 2.pdf" vs "MATV+121+Tutorial+Task+2.pdf"). index.js dedupes new
+// fetches, but rows that already slipped in (or arrive via a path we don't dedupe) linger —
+// so, like purgeVideos, enforce the invariant each run: within one module, efundi resources
+// whose normalized titles match are duplicates; keep the cleanest title, remove the rest.
+// Normalization MUST match index.js's nameKey: collapse '+'/whitespace runs, lowercase.
+export async function purgeDuplicateResources(sb) {
+  const { data, error } = await sb.from('resources')
+    .select('id, module_id, title, storage_path').eq('source', 'efundi');
+  if (error) { console.warn(`purgeDuplicateResources: ${error.message}`); return 0; }
+  const plusCount = t => (String(t).match(/\+/g) || []).length;
+  const groups = new Map();
+  for (const r of data ?? []) {
+    const key = `${r.module_id}|${String(r.title).replace(/[+\s]+/g, ' ').trim().toLowerCase()}`;
+    (groups.get(key) ?? groups.set(key, []).get(key)).push(r);
+  }
+  const losers = [];
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    rows.sort((a, b) => plusCount(a.title) - plusCount(b.title) || String(a.title).localeCompare(b.title));
+    losers.push(...rows.slice(1));
+  }
+  if (!losers.length) return 0;
+  const paths = losers.map(r => r.storage_path).filter(Boolean);
+  if (paths.length) {
+    const { error: se } = await sb.storage.from('resources').remove(paths);
+    if (se) console.warn(`purgeDuplicateResources storage remove: ${se.message}`);
+  }
+  const { error: de } = await sb.from('resources').delete().in('id', losers.map(r => r.id));
+  if (de) { console.warn(`purgeDuplicateResources row delete: ${de.message}`); return 0; }
+  for (const r of losers) console.log(`  purged duplicate resource: ${r.title}`);
+  return losers.length;
+}
+
 // Resolve the owner uid without touching auth admin: every module row is Megan's.
 export async function resolveOwner(sb) {
   const { data, error } = await sb.from('modules').select('owner').limit(1).single();
