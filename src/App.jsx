@@ -404,12 +404,15 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         </div>
 
         <Section title="Study Units">
-          <div className="space-y-3">
-            {units.map((u) => (
+          {(() => {
+            // Section-style modules (e.g. MATV121) title their units "S.S. 1.1: …". These get
+            // grouped under their parent Study Unit; every other module keeps the flat list.
+            const isSectioned = units.some((u) => /^\s*S\.S\.?\s*\d/.test(u.title))
+            const renderPanel = (u, showNum) => (
               <div key={u.id} className="panel p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-bold" style={{ color: '#eaf4ff', fontSize: 16 }}>
-                    <span className="muted" style={{ marginRight: 8 }}>{u.number}.</span>{u.title}
+                    {showNum && <span className="muted" style={{ marginRight: 8 }}>{u.number}.</span>}{u.title}
                   </div>
                   <span className="chip">{u.status.replace('_', ' ')}</span>
                 </div>
@@ -421,8 +424,30 @@ function ModulePage({ code, isViewer, userId, onBack }) {
                   )) : <span className="muted text-sm">{isViewer ? 'No summary yet.' : 'No summary yet — ask your tutor to make one.'}</span>}
                 </div>
               </div>
-            ))}
-          </div>
+            )
+            if (!isSectioned) {
+              return <div className="space-y-3">{units.map((u) => renderPanel(u, true))}</div>
+            }
+            const groupNum = (u) => { const m = u.title.match(/S\.S\.?\s*(\d+)\./); return m ? Number(m[1]) : 0 }
+            const groupLabel = (g) => {
+              const first = units.find((u) => groupNum(u) === g)
+              const m = first?.notes?.match(/^Study Unit \d[^·]*/)
+              return m ? m[0].trim() : `Study Unit ${g}`
+            }
+            const groups = [...new Set(units.map(groupNum))].sort((a, b) => a - b)
+            return (
+              <div className="space-y-5">
+                {groups.map((g) => (
+                  <div key={g}>
+                    <div className="section-label mb-2" style={{ color: accent }}>{groupLabel(g)}</div>
+                    <div className="space-y-3">
+                      {units.filter((u) => groupNum(u) === g).map((u) => renderPanel(u, false))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
         </Section>
 
         <Section title="Assessments" empty={!assessments.length && 'None yet.'}>
