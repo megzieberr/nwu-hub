@@ -6,7 +6,7 @@
 import { login, AuthError } from './auth.js';
 import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
-  makeSupabase, resolveOwner, loadSiteMap, autoMapSites, existingHashes,
+  makeSupabase, resolveOwner, loadSiteMap, loadSiteTitles, autoMapSites, existingHashes,
   syncAnnouncements, syncAssignments, syncContent, purgeVideos,
 } from './write.js';
 import { generateObjectives } from './objectives.js';
@@ -47,6 +47,21 @@ async function main() {
     try { await autoMapSites(sb, owner, sites, siteMap); }
     catch (e) { console.warn(`  auto-map error (non-fatal): ${e?.message ?? e}`); }
     console.log(`eFundi reports ${sites.length} site(s); ${siteMap.size} mapped.`);
+
+    // Safety net: site.json has dropped enrolled sites before (pagination default of 10
+    // hid MATV121, 2026-07-12). A mapped site we KNOW about must sync even when the
+    // listing omits it — the per-site /direct endpoints only need the id, and a stale or
+    // wrong id is harmless (they just return empty). Non-fatal: labels fall back to uuid.
+    try {
+      const listed = new Set(sites.map(s => s.id));
+      const titles = await loadSiteTitles(sb);
+      for (const siteId of siteMap.keys()) {
+        if (listed.has(siteId)) continue;
+        const title = titles.get(siteId) || siteId;
+        console.log(`  + mapped but missing from site.json — syncing anyway: ${title} [${siteId}]`);
+        sites.push({ id: siteId, title });
+      }
+    } catch (e) { console.warn(`  mapped-site fallback error (non-fatal): ${e?.message ?? e}`); }
 
     let hadError = false;
     for (const site of sites) {

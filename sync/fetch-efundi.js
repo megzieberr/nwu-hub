@@ -36,11 +36,27 @@ function absoluteUrl(u) {
 }
 
 export async function listSites(client) {
-  const data = await getJson(client, '/direct/site.json');
-  return (data?.site_collection ?? []).map(s => ({
-    id: s.id,
-    title: s.title ?? s.props?.Module ?? s.id,
-  }));
+  // /direct/site.json is PAGINATED — this Sakai returns 10 sites per page by default, and
+  // Megan is enrolled in more than that, so a single unpaged call silently dropped sites
+  // (MATV121 never synced, 2026-07-12). Walk pages via EntityBroker's _limit/_start until
+  // a page adds nothing new. The dedupe guard also stops the loop safely if this Sakai
+  // ignores _start and keeps serving the same first page.
+  const PAGE = 50;
+  const out = [];
+  const seen = new Set();
+  for (let start = 0; start < 1000; start += PAGE) {
+    const data = await getJson(client, `/direct/site.json?_limit=${PAGE}&_start=${start}`);
+    const batch = data?.site_collection ?? [];
+    let added = 0;
+    for (const s of batch) {
+      if (!s?.id || seen.has(s.id)) continue;
+      seen.add(s.id);
+      added++;
+      out.push({ id: s.id, title: s.title ?? s.props?.Module ?? s.id });
+    }
+    if (!batch.length || !added) break;   // last page, or server repeating a page
+  }
+  return out;
 }
 
 export async function fetchSiteAnnouncements(client, siteId) {

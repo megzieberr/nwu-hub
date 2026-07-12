@@ -60,6 +60,15 @@ export async function loadSiteMap(sb) {
   return map;
 }
 
+// loadSiteTitles — title_snapshot for every ACTIVE mapped site, used purely to label sites
+// that site.json omits (see index.js fallback) with something friendlier than a bare uuid.
+export async function loadSiteTitles(sb) {
+  const { data, error } = await sb.from('efundi_site_map')
+    .select('efundi_site_id, title_snapshot').eq('active', true);
+  if (error) throw error;
+  return new Map((data ?? []).map(r => [r.efundi_site_id, r.title_snapshot]));
+}
+
 // autoMapSites — map newly-visible eFundi sites to modules by title, so a lecturer opening a
 // course site mid-semester starts syncing on the next run with ZERO manual steps.
 // NWU names course sites with the module code in the title ("EDCC125", "ENGV121-2026",
