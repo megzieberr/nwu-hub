@@ -86,10 +86,16 @@ async function main() {
         // (MATV121 has "MATV 121 Tutorial Task 7.pdf" AND a "MATV+121+…" upload artifact —
         // distinct sakaiIds, identical content). Dedupe by normalized filename too, preferring
         // the cleaner title (fewest '+'); the sort is stable, so Resources still wins ties.
+        // Prefer, in order: the variant already in the hub (else purgeDuplicateResources and
+        // this dedupe can each pick a DIFFERENT winner and the pair oscillates forever —
+        // purge deletes one at run start, this re-inserts the other as "new", every run),
+        // then the cleanest title (fewest '+'); the sort is stable, so Resources wins ties.
         const plusCount = t => (String(t).match(/\+/g) || []).length;
         const byId = new Map();
         const byName = new Set();
-        const candidates = [...resFiles, ...lessonFiles].sort((a, b) => plusCount(a.title) - plusCount(b.title));
+        const candidates = [...resFiles, ...lessonFiles].sort((a, b) =>
+          (prevRes.has(a.sourceId) ? 0 : 1) - (prevRes.has(b.sourceId) ? 0 : 1)
+          || plusCount(a.title) - plusCount(b.title));
         for (const f of candidates) {
           if (!f.sourceId || byId.has(f.sourceId)) continue;
           const nameKey = String(f.title).replace(/[+\s]+/g, ' ').trim().toLowerCase();
