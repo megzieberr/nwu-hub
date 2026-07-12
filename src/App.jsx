@@ -172,11 +172,15 @@ function Dashboard({ isViewer, onOpenModule }) {
     ;(async () => {
       const [m, a] = await Promise.all([
         supabase.from('modules').select('*').order('code'),
-        supabase.from('assessments').select('*, modules(code,colour)').eq('status', 'upcoming').order('due_date'),
+        supabase.from('assessments').select('*, modules(code,colour,hidden)').eq('status', 'upcoming').order('due_date'),
       ])
       if (m.error) setError(m.error.message)
-      setModules(m.data || [])
-      setDeadlines(a.data || [])
+      // Hidden modules still sync (their announcements feed the objectives agent) but get no
+      // dashboard tile — drop them here so both the grid and the module count skip them.
+      setModules((m.data || []).filter((x) => !x.hidden))
+      // ...and keep a hidden module's assessments out of the Quest Log too, so nothing but its
+      // announcements ever surfaces on the dashboard.
+      setDeadlines((a.data || []).filter((d) => !d.modules?.hidden))
       // Personal study goals are owner-only — a read-only viewer never sees this section.
       // Done ones are fetched too but hidden by default (tucked under the "Done" tab so a
       // mistaken tick can be undone); active ones show, ordered by target date.
