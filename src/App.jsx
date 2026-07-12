@@ -376,7 +376,11 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // Unit summaries live under Study Units; assessment-linked briefs live under Assessments.
   // A brief sets assessment_id (unit_id null), so guarding on both keeps them from doubling up.
   const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId && !s.assessment_id)
-  const briefsFor = (assessmentId) => summaries.filter((s) => s.assessment_id === assessmentId)
+  // A "(START HERE)" brief covers the whole assessment set, so float it to the top of the
+  // section instead of nesting it under whichever single assessment it happens to be linked to.
+  const isOverviewBrief = (s) => /\(start here\)/i.test(s.title || '')
+  const overviewBriefs = summaries.filter((s) => s.assessment_id && isOverviewBrief(s))
+  const briefsFor = (assessmentId) => summaries.filter((s) => s.assessment_id === assessmentId && !isOverviewBrief(s))
   const accent = mod.colour || 'var(--cyan)'
 
   return (
@@ -422,6 +426,15 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         </Section>
 
         <Section title="Assessments" empty={!assessments.length && 'None yet.'}>
+          {overviewBriefs.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {overviewBriefs.map((s) => (
+                <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
+                  📋 {s.title}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="space-y-3">
             {assessments.map((a) => {
               const briefs = briefsFor(a.id)
