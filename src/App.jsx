@@ -194,6 +194,16 @@ function Dashboard({ isViewer, onOpenModule }) {
     })()
   }, [isViewer])
 
+  // Dashboard-only cutoff so the quest log reads as "what's actually coming up", not the
+  // whole semester's dread. The full list (incl. date-TBC ones) still lives on each module's
+  // Assessments page — this just trims the emotional load of the home screen.
+  const QUEST_WINDOW_MS = 21 * 24 * 60 * 60 * 1000
+  const questLog = deadlines.filter((d) => {
+    if (!d.due_date) return false
+    const due = new Date(d.due_date).getTime()
+    return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
+  })
+
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
     const done = !goal.done
@@ -251,9 +261,9 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </Section>
 
-        <Section title="Quest Log · Upcoming" empty={!deadlines.length && 'Nothing due yet.'}>
+        <Section title="Quest Log · Upcoming" empty={!questLog.length && 'Nothing due in the next 3 weeks.'}>
           <div className="panel">
-            {deadlines.map((d) => {
+            {questLog.map((d) => {
               const c = d.modules?.colour || 'var(--cyan)'
               return (
                 <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14 }}>
