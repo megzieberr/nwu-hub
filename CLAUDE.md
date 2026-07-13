@@ -81,6 +81,13 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
   a fresh class row (module code + weekday + time). Date/weekday math: agent resolves partial dates
   to the next upcoming occurrence — NEVER a past year/day (a "Wednesday" resolved to the wrong date
   was a real early bug).
+- **Reconciliation (the agent's read-back "memory").** NWU often posts the class TIME first and the
+  join LINK days later in a separate announcement. So the agent no longer just appends: before
+  writing, it reads the module's currently-relevant open classes (recurring / undated / target_date
+  ≥ today−7d) and passes them to the model with their ids. If the announcement is about one of them,
+  the model returns `updates_id` and the agent PATCHES that row (link is sticky — a link-less
+  reschedule never wipes an existing link) instead of creating a duplicate. Invalid/hallucinated ids
+  fall back to insert. `updates_id` is model-output only, not a stored column — no migration.
 - Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
 
 **Pending / next:**
