@@ -185,7 +185,7 @@ function Dashboard({ isViewer, onOpenModule }) {
       // Done ones are fetched too but hidden by default (tucked under the "Done" tab so a
       // mistaken tick can be undone); active ones show, ordered by target date.
       if (!isViewer) {
-        const g = await supabase.from('goals').select('*')
+        const g = await supabase.from('goals').select('*, modules(code,colour)')
           .order('done').order('target_date', { nullsFirst: false })
         setGoals(g.data || [])
         // Latest eFundi sync run (owner-only via RLS). Table may not exist pre-0005 → error
@@ -207,6 +207,17 @@ function Dashboard({ isViewer, onOpenModule }) {
     const due = new Date(d.due_date).getTime()
     return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
   })
+
+  // Classes are agent-tagged goals (kind='class'), shown on their own — same rolling 3-week window
+  // as the Quest Log, so a rescheduled class with last week's link falls off by itself. Compare on
+  // date strings (YYYY-MM-DD sort lexically) so today's class stays visible all day, not just until
+  // its start time. Undated classes are kept rather than silently dropped.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const classWindowStr = new Date(Date.now() + QUEST_WINDOW_MS).toISOString().slice(0, 10)
+  const classes = goals
+    .filter((g) => g.kind === 'class')
+    .filter((g) => !g.target_date || (g.target_date >= todayStr && g.target_date <= classWindowStr))
+    .sort((a, b) => (a.target_date || '9999-99-99').localeCompare(b.target_date || '9999-99-99'))
 
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
@@ -279,11 +290,20 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </Section>
 
+        {!isViewer && (
+          <Section title="Classes · Upcoming" empty={!classes.length && 'No classes scheduled in the next 3 weeks.'}>
+            <div className="panel">
+              {classes.map((g) => <ClassRow key={g.id} g={g} />)}
+            </div>
+          </Section>
+        )}
+
         {!isViewer && (() => {
-          const active = goals.filter((g) => !g.done)
-          const done = goals.filter((g) => g.done)
+          const objectives = goals.filter((g) => g.kind !== 'class')
+          const active = objectives.filter((g) => !g.done)
+          const done = objectives.filter((g) => g.done)
           return (
-            <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
+            <Section title="Objectives" empty={!objectives.length && 'No goals set.'}>
               <div className="panel">
                 {active.length
                   ? active.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)
@@ -307,6 +327,28 @@ function Dashboard({ isViewer, onOpenModule }) {
           )
         })()}
       </main>
+    </div>
+  )
+}
+
+// One class row. No tick — a class isn't "done", it just passes and drops out of the 3-week
+// window on its own. Left border is the module colour (matches the Quest Log). The join link,
+// when present, is a tappable "Join →" (lecturers change it most weeks, so it lives on the row).
+function ClassRow({ g }) {
+  const c = g.modules?.colour || 'var(--cyan)'
+  return (
+    <div className="row" style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 12 }}>
+      <span style={{ flex: 1, minWidth: 0 }}>{g.text}</span>
+      {g.link && (
+        <a
+          href={g.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm"
+          style={{ color: 'var(--cyan)', whiteSpace: 'nowrap', fontWeight: 600 }}
+        >Join →</a>
+      )}
+      {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
     </div>
   )
 }

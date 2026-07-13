@@ -26,6 +26,12 @@ Return an EMPTY list for everything else: general reminders, FYI notices, greeti
 clarifications about content, or anything that has already passed. These are NOT objectives — the
 announcement is still kept on file for the student's AI tutor to reference, so never force a goal.
 
+Set each goal's "kind":
+  • "class" — ONLY a live class/lecture/tutorial/online session the student attends at a set time.
+  • "task" — everything else, including tests, assignments, submissions and registrations.
+Classes are shown in their own section and change often (new time / new link most weeks), so getting
+this right matters.
+
 Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submit Assignment 1",
 "Register for Test 2").
 
@@ -50,11 +56,12 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'target_date', 'link'],
+        required: ['text', 'target_date', 'link', 'kind'],
         properties: {
           text: { type: 'string' },
           target_date: { type: ['string', 'null'] },
           link: { type: ['string', 'null'] },
+          kind: { type: 'string', enum: ['task', 'class'] },
         },
       },
     },
@@ -119,7 +126,7 @@ export async function generateObjectives(sb) {
         const { error: ge } = await sb.from('goals').insert({
           owner: a.owner, module_id: a.module_id,
           text: String(g.text).slice(0, 300), target_date: validDate(g.target_date),
-          link: validUrl(g.link),
+          link: validUrl(g.link), kind: g.kind === 'class' ? 'class' : 'task',
           source: 'efundi-agent', source_id: a.source_id,
         });
         if (ge) { console.warn(`  objectives: goal insert failed: ${ge.message}`); continue; }

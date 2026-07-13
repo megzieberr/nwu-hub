@@ -69,9 +69,13 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - eFundi sync live on `main`, running twice daily. Objectives agent active (API key set).
 - Focused-hub frontend deployed (raw content hidden).
 - Objectives UI: ticking one makes it vanish into a collapsible "Objectives Done" tab (no pile-up).
-- Class/session objectives carry a join link: `goals.link` (migration `0009`), rendered as a
-  tappable "Join →" in the objective row. The agent fills it from any meeting URL in the
-  announcement, and is told to make class objectives unambiguous (module code + weekday/date + time).
+- **Classes** are split out from Objectives. `goals.kind` (`0010`) is `'task'` or `'class'`; the
+  agent tags live classes/lectures/tutorials/sessions as `'class'`. The dashboard shows them in a
+  "Classes · Upcoming" section — a rolling 3-week window (like the Quest Log), no done-tick, so a
+  rescheduled class drops off on its own and Objectives never fills with recurring classes.
+- Classes carry a join link: `goals.link` (`0009`), rendered as a tappable "Join →". Lecturers
+  change the link/time most weeks, so the agent re-reads each week's announcement and writes a fresh
+  class row (module code + weekday/date + time, e.g. "MATV121 online class — Wed 17 Jul, 19:00").
 - Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
 
 **Pending / next:**
