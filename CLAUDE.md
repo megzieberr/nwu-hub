@@ -3,7 +3,7 @@
 Single-user study hub for Megan (NWU B.Ed student). React + Vite PWA on GitHub Pages, Supabase
 backend. This file is the catch-up for a new session — **trust it over any older notes.**
 
-_Last updated: 2026-07-11._
+_Last updated: 2026-07-13._
 
 ## What this project is
 
@@ -63,7 +63,7 @@ A Claude Code tutor briefs itself on a module with **one query** instead of craw
 `select * from module_context where code = 'ALDE122';` → announcements (lecturer context),
 objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-context.md`.
 
-## Current status (2026-07-11)
+## Current status (2026-07-13)
 
 **Done / live:**
 - eFundi sync live on `main`, running twice daily. Objectives agent active (API key set).
@@ -90,13 +90,14 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
   the model returns `updates_id` and the agent PATCHES that row (link is sticky — a link-less
   reschedule never wipes an existing link) instead of creating a duplicate. Invalid/hallucinated ids
   fall back to insert. `updates_id` is model-output only, not a stored column — no migration.
-- Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
+- Mapped & syncing: **ALDE122, EDCC125, ENGV121, MATV121**, plus **TPED178** (mapped but `hidden` —
+  syncs for its announcement stream, no dashboard tile).
 
 **Pending / next:**
-- Map **MATH121, MATV121, SECL121** once they appear as eFundi sites. (Currently eFundi only exposes
-  the sem-1 `…111` codes, which don't match these sem-2 modules — so nothing to map yet.) To map a
-  module: one upsert into `efundi_site_map (owner, efundi_site_id, module_id, title_snapshot, active)`
-  using the Sakai site UUID from `/direct/site.json` or a `/portal/site/<uuid>` URL.
+- Map **MATH121, SECL121** once they appear as eFundi sites. (eFundi still exposes the sem-1 `…111`
+  codes for these, which don't match the sem-2 codes — so nothing to map yet.) To map a module: one
+  upsert into `efundi_site_map (owner, efundi_site_id, module_id, title_snapshot, active)` using the
+  Sakai site UUID from `/direct/site.json` or a `/portal/site/<uuid>` URL.
 - Optional, not built: an in-app "Sync now" button (needs an Edge Function + GitHub token); a
   "teach me this module" tutor instruction snippet that loads `module_context`.
 
