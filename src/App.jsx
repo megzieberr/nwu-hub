@@ -61,6 +61,20 @@ function syncStatusColour(status) {
   return 'var(--cyan)'
 }
 
+// Small UTC date helpers for the weekly Classes window. All take/return 'YYYY-MM-DD'; noon-UTC
+// anchoring keeps a whole-day shift from ever crossing a date boundary.
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+function weekdayIndex(dateStr) {   // 0 = Monday … 6 = Sunday
+  return (new Date(dateStr + 'T12:00:00Z').getUTCDay() + 6) % 7
+}
+function mondayOf(dateStr) {
+  return addDays(dateStr, -weekdayIndex(dateStr))
+}
+
 // The sync fails SILENTLY by design (no push, no email) — this banner is the one loud surface.
 // Two triggers: the last run failed outright, or no run has landed in >26h (schedule is every
 // 12h; 26h = both daily runs missed even allowing for GitHub's best-effort cron drift). The
@@ -185,7 +199,7 @@ function Dashboard({ isViewer, onOpenModule }) {
       // Done ones are fetched too but hidden by default (tucked under the "Done" tab so a
       // mistaken tick can be undone); active ones show, ordered by target date.
       if (!isViewer) {
-        const g = await supabase.from('goals').select('*')
+        const g = await supabase.from('goals').select('*, modules(code,colour)')
           .order('done').order('target_date', { nullsFirst: false })
         setGoals(g.data || [])
         // Latest eFundi sync run (owner-only via RLS). Table may not exist pre-0005 → error
@@ -207,6 +221,29 @@ function Dashboard({ isViewer, onOpenModule }) {
     const due = new Date(d.due_date).getTime()
     return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
   })
+
+  // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
+  // — the home screen shows what's on now, not the whole semester. A one-off class shows only in the
+  // week its date falls in, then drops off. A recurring class (recurring=true — the lecturer said it
+  // runs weekly on a standing link) always shows, placed on its weekday for the shown week (weekday
+  // derived from target_date). Date strings sort/compare lexically.
+  // On SUNDAYS the window rolls forward to next week, so the Sunday-evening sync surfaces the week
+  // ahead (Sunday itself is effectively spent — uni classes don't run then).
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const showNextWeek = weekdayIndex(todayStr) === 6   // 6 = Sunday
+  const weekStartStr = mondayOf(showNextWeek ? addDays(todayStr, 1) : todayStr)
+  const weekEndStr = addDays(weekStartStr, 6)
+  const classes = goals
+    .filter((g) => g.kind === 'class')
+    .map((g) => ({
+      ...g,
+      // recurring → this week's occurrence on the same weekday; one-off → its own date.
+      showDate: g.recurring && g.target_date
+        ? addDays(weekStartStr, weekdayIndex(g.target_date))
+        : g.target_date,
+    }))
+    .filter((g) => g.recurring || (g.showDate && g.showDate >= weekStartStr && g.showDate <= weekEndStr))
+    .sort((a, b) => (a.showDate || '9999-99-99').localeCompare(b.showDate || '9999-99-99'))
 
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
@@ -279,11 +316,21 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </Section>
 
+        {!isViewer && (
+          <Section title={`Classes · ${showNextWeek ? 'Next' : 'This'} Week`}
+            empty={!classes.length && `No classes scheduled ${showNextWeek ? 'next' : 'this'} week.`}>
+            <div className="panel">
+              {classes.map((g) => <ClassRow key={g.id} g={g} />)}
+            </div>
+          </Section>
+        )}
+
         {!isViewer && (() => {
-          const active = goals.filter((g) => !g.done)
-          const done = goals.filter((g) => g.done)
+          const objectives = goals.filter((g) => g.kind !== 'class')
+          const active = objectives.filter((g) => !g.done)
+          const done = objectives.filter((g) => g.done)
           return (
-            <Section title="Objectives" empty={!goals.length && 'No goals set.'}>
+            <Section title="Objectives" empty={!objectives.length && 'No goals set.'}>
               <div className="panel">
                 {active.length
                   ? active.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)
@@ -311,6 +358,36 @@ function Dashboard({ isViewer, onOpenModule }) {
   )
 }
 
+// One class row. No tick — a class isn't "done", it just passes and drops out of the 3-week
+// window on its own. Left border is the module colour (matches the Quest Log). The join link,
+// when present, is a tappable "Join →" (lecturers change it most weeks, so it lives on the row).
+function ClassRow({ g }) {
+  const c = g.modules?.colour || 'var(--cyan)'
+  return (
+    <div className="row" style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 12 }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {g.text}
+        {g.recurring && (
+          <span className="mono text-xs" style={{
+            marginLeft: 8, padding: '1px 6px', borderRadius: 5, whiteSpace: 'nowrap',
+            border: `1px solid ${c}`, color: c,
+          }}>WEEKLY</span>
+        )}
+      </span>
+      {g.link && (
+        <a
+          href={g.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm"
+          style={{ color: 'var(--cyan)', whiteSpace: 'nowrap', fontWeight: 600 }}
+        >Join →</a>
+      )}
+      {g.showDate && <span className="muted text-sm">{g.showDate}</span>}
+    </div>
+  )
+}
+
 // One objective row. Ticking it moves it out of the active list (vanishes) into the "Done"
 // tab — no strike-through, no pile-up. Untick from the Done tab to bring it back.
 function ObjectiveRow({ g, onToggle }) {
@@ -326,7 +403,19 @@ function ObjectiveRow({ g, onToggle }) {
           color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px', cursor: 'pointer',
         }}
       >{g.done ? '✓' : ''}</button>
-      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>{g.text}</span>
+      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>
+        {g.text}
+        {g.link && (
+          <a
+            href={g.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-sm"
+            style={{ marginLeft: 8, color: 'var(--cyan)', whiteSpace: 'nowrap', fontWeight: 600 }}
+          >Join →</a>
+        )}
+      </span>
       {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
     </div>
   )

@@ -69,6 +69,27 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - eFundi sync live on `main`, running twice daily. Objectives agent active (API key set).
 - Focused-hub frontend deployed (raw content hidden).
 - Objectives UI: ticking one makes it vanish into a collapsible "Objectives Done" tab (no pile-up).
+- **Classes** are split out from Objectives. `goals.kind` (`0010`) is `'task'` or `'class'`; the
+  agent tags live classes/lectures/tutorials/sessions as `'class'`. Shown in a **"Classes · This
+  Week"** section (Mon–Sun only, no done-tick) so the home screen shows what's on now, not the whole
+  semester. One-off classes show only in their week, then drop off. On **Sundays** the window rolls
+  forward to next week (title → "Classes · Next Week") so the Sunday-evening sync surfaces the week
+  ahead.
+- `goals.recurring` (`0011`): a class the lecturer said runs weekly on a standing link. Recurring
+  classes always show, placed on their weekday for the current week (weekday derived from
+  `target_date`); rendered with a small "WEEKLY" tag.
+- Classes carry a join link: `goals.link` (`0009`), rendered as a tappable "Join →". Lecturers
+  change the one-off link/time most weeks, so the agent re-reads each week's announcement and writes
+  a fresh class row (module code + weekday + time). Date/weekday math: agent resolves partial dates
+  to the next upcoming occurrence — NEVER a past year/day (a "Wednesday" resolved to the wrong date
+  was a real early bug).
+- **Reconciliation (the agent's read-back "memory").** NWU often posts the class TIME first and the
+  join LINK days later in a separate announcement. So the agent no longer just appends: before
+  writing, it reads the module's currently-relevant open classes (recurring / undated / target_date
+  ≥ today−7d) and passes them to the model with their ids. If the announcement is about one of them,
+  the model returns `updates_id` and the agent PATCHES that row (link is sticky — a link-less
+  reschedule never wipes an existing link) instead of creating a duplicate. Invalid/hallucinated ids
+  fall back to insert. `updates_id` is model-output only, not a stored column — no migration.
 - Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
 
 **Pending / next:**
