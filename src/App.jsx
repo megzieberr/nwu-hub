@@ -222,12 +222,16 @@ function Dashboard({ isViewer, onOpenModule }) {
     return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
   })
 
-  // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to THIS WEEK only
-  // (Mon–Sun) — the home screen shows what's on now, not the whole semester. A one-off class shows
-  // only in the week its date falls in, then drops off. A recurring class (recurring=true — the
-  // lecturer said it runs weekly on a standing link) always shows, placed on its weekday for the
-  // current week (weekday derived from target_date). Date strings sort/compare lexically.
-  const weekStartStr = mondayOf(new Date().toISOString().slice(0, 10))
+  // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
+  // — the home screen shows what's on now, not the whole semester. A one-off class shows only in the
+  // week its date falls in, then drops off. A recurring class (recurring=true — the lecturer said it
+  // runs weekly on a standing link) always shows, placed on its weekday for the shown week (weekday
+  // derived from target_date). Date strings sort/compare lexically.
+  // On SUNDAYS the window rolls forward to next week, so the Sunday-evening sync surfaces the week
+  // ahead (Sunday itself is effectively spent — uni classes don't run then).
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const showNextWeek = weekdayIndex(todayStr) === 6   // 6 = Sunday
+  const weekStartStr = mondayOf(showNextWeek ? addDays(todayStr, 1) : todayStr)
   const weekEndStr = addDays(weekStartStr, 6)
   const classes = goals
     .filter((g) => g.kind === 'class')
@@ -313,7 +317,8 @@ function Dashboard({ isViewer, onOpenModule }) {
         </Section>
 
         {!isViewer && (
-          <Section title="Classes · This Week" empty={!classes.length && 'No classes scheduled this week.'}>
+          <Section title={`Classes · ${showNextWeek ? 'Next' : 'This'} Week`}
+            empty={!classes.length && `No classes scheduled ${showNextWeek ? 'next' : 'this'} week.`}>
             <div className="panel">
               {classes.map((g) => <ClassRow key={g.id} g={g} />)}
             </div>

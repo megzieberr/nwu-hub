@@ -72,7 +72,9 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - **Classes** are split out from Objectives. `goals.kind` (`0010`) is `'task'` or `'class'`; the
   agent tags live classes/lectures/tutorials/sessions as `'class'`. Shown in a **"Classes · This
   Week"** section (Mon–Sun only, no done-tick) so the home screen shows what's on now, not the whole
-  semester. One-off classes show only in their week, then drop off.
+  semester. One-off classes show only in their week, then drop off. On **Sundays** the window rolls
+  forward to next week (title → "Classes · Next Week") so the Sunday-evening sync surfaces the week
+  ahead.
 - `goals.recurring` (`0011`): a class the lecturer said runs weekly on a standing link. Recurring
   classes always show, placed on their weekday for the current week (weekday derived from
   `target_date`); rendered with a small "WEEKLY" tag.
