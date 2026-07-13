@@ -27,7 +27,15 @@ clarifications about content, or anything that has already passed. These are NOT
 announcement is still kept on file for the student's AI tutor to reference, so never force a goal.
 
 Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submit Assignment 1",
-"Register for Test 2"). Classes/sessions include the date and time ("Online class Mon 14 Jul, 09:00").
+"Register for Test 2").
+
+Classes/sessions must be UNAMBIGUOUS — the student should never have to open the announcement to
+know what/when. Always include, in this order: the module code, the weekday + date, and the time.
+Format them like "MATV121 online class — Wed 17 Jul, 19:00" (the module code is given in the message).
+If the announcement gives a join/meeting URL (Teams, Zoom, Google Meet, etc.), put that full URL in
+the goal's "link" field; otherwise set link to null. Only classes/sessions get a link — leave it
+null for ordinary tasks.
+
 If a clear date is stated set target_date to it (YYYY-MM-DD); otherwise null. Never invent dates.
 A date may omit the year — resolve it using "today" (given in the message) to the current or next
 upcoming occurrence, and NEVER output a year earlier than today's. Return at most 3 goals.`;
@@ -42,10 +50,11 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'target_date'],
+        required: ['text', 'target_date', 'link'],
         properties: {
           text: { type: 'string' },
           target_date: { type: ['string', 'null'] },
+          link: { type: ['string', 'null'] },
         },
       },
     },
@@ -59,6 +68,11 @@ function toText(html) {
 
 function validDate(d) {
   return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+// Only accept real http(s) URLs; anything else (a stray sentence, a mailto, null) -> no link.
+function validUrl(u) {
+  return typeof u === 'string' && /^https?:\/\/\S+$/i.test(u.trim()) ? u.trim() : null;
 }
 
 // Returns the number of goals created. Never throws — failures are logged and the run continues.
@@ -105,6 +119,7 @@ export async function generateObjectives(sb) {
         const { error: ge } = await sb.from('goals').insert({
           owner: a.owner, module_id: a.module_id,
           text: String(g.text).slice(0, 300), target_date: validDate(g.target_date),
+          link: validUrl(g.link),
           source: 'efundi-agent', source_id: a.source_id,
         });
         if (ge) { console.warn(`  objectives: goal insert failed: ${ge.message}`); continue; }

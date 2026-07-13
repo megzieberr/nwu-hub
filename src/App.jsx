@@ -326,7 +326,19 @@ function ObjectiveRow({ g, onToggle }) {
           color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px', cursor: 'pointer',
         }}
       >{g.done ? '✓' : ''}</button>
-      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>{g.text}</span>
+      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>
+        {g.text}
+        {g.link && (
+          <a
+            href={g.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-sm"
+            style={{ marginLeft: 8, color: 'var(--cyan)', whiteSpace: 'nowrap', fontWeight: 600 }}
+          >Join →</a>
+        )}
+      </span>
       {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
     </div>
   )

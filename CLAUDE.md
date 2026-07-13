@@ -69,6 +69,9 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - eFundi sync live on `main`, running twice daily. Objectives agent active (API key set).
 - Focused-hub frontend deployed (raw content hidden).
 - Objectives UI: ticking one makes it vanish into a collapsible "Objectives Done" tab (no pile-up).
+- Class/session objectives carry a join link: `goals.link` (migration `0009`), rendered as a
+  tappable "Join →" in the objective row. The agent fills it from any meeting URL in the
+  announcement, and is told to make class objectives unambiguous (module code + weekday/date + time).
 - Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
 
 **Pending / next:**
