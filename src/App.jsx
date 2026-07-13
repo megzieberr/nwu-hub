@@ -61,6 +61,20 @@ function syncStatusColour(status) {
   return 'var(--cyan)'
 }
 
+// Small UTC date helpers for the weekly Classes window. All take/return 'YYYY-MM-DD'; noon-UTC
+// anchoring keeps a whole-day shift from ever crossing a date boundary.
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+function weekdayIndex(dateStr) {   // 0 = Monday … 6 = Sunday
+  return (new Date(dateStr + 'T12:00:00Z').getUTCDay() + 6) % 7
+}
+function mondayOf(dateStr) {
+  return addDays(dateStr, -weekdayIndex(dateStr))
+}
+
 // The sync fails SILENTLY by design (no push, no email) — this banner is the one loud surface.
 // Two triggers: the last run failed outright, or no run has landed in >26h (schedule is every
 // 12h; 26h = both daily runs missed even allowing for GitHub's best-effort cron drift). The
@@ -208,16 +222,24 @@ function Dashboard({ isViewer, onOpenModule }) {
     return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
   })
 
-  // Classes are agent-tagged goals (kind='class'), shown on their own — same rolling 3-week window
-  // as the Quest Log, so a rescheduled class with last week's link falls off by itself. Compare on
-  // date strings (YYYY-MM-DD sort lexically) so today's class stays visible all day, not just until
-  // its start time. Undated classes are kept rather than silently dropped.
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const classWindowStr = new Date(Date.now() + QUEST_WINDOW_MS).toISOString().slice(0, 10)
+  // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to THIS WEEK only
+  // (Mon–Sun) — the home screen shows what's on now, not the whole semester. A one-off class shows
+  // only in the week its date falls in, then drops off. A recurring class (recurring=true — the
+  // lecturer said it runs weekly on a standing link) always shows, placed on its weekday for the
+  // current week (weekday derived from target_date). Date strings sort/compare lexically.
+  const weekStartStr = mondayOf(new Date().toISOString().slice(0, 10))
+  const weekEndStr = addDays(weekStartStr, 6)
   const classes = goals
     .filter((g) => g.kind === 'class')
-    .filter((g) => !g.target_date || (g.target_date >= todayStr && g.target_date <= classWindowStr))
-    .sort((a, b) => (a.target_date || '9999-99-99').localeCompare(b.target_date || '9999-99-99'))
+    .map((g) => ({
+      ...g,
+      // recurring → this week's occurrence on the same weekday; one-off → its own date.
+      showDate: g.recurring && g.target_date
+        ? addDays(weekStartStr, weekdayIndex(g.target_date))
+        : g.target_date,
+    }))
+    .filter((g) => g.recurring || (g.showDate && g.showDate >= weekStartStr && g.showDate <= weekEndStr))
+    .sort((a, b) => (a.showDate || '9999-99-99').localeCompare(b.showDate || '9999-99-99'))
 
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
@@ -291,7 +313,7 @@ function Dashboard({ isViewer, onOpenModule }) {
         </Section>
 
         {!isViewer && (
-          <Section title="Classes · Upcoming" empty={!classes.length && 'No classes scheduled in the next 3 weeks.'}>
+          <Section title="Classes · This Week" empty={!classes.length && 'No classes scheduled this week.'}>
             <div className="panel">
               {classes.map((g) => <ClassRow key={g.id} g={g} />)}
             </div>
@@ -338,7 +360,15 @@ function ClassRow({ g }) {
   const c = g.modules?.colour || 'var(--cyan)'
   return (
     <div className="row" style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 12 }}>
-      <span style={{ flex: 1, minWidth: 0 }}>{g.text}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {g.text}
+        {g.recurring && (
+          <span className="mono text-xs" style={{
+            marginLeft: 8, padding: '1px 6px', borderRadius: 5, whiteSpace: 'nowrap',
+            border: `1px solid ${c}`, color: c,
+          }}>WEEKLY</span>
+        )}
+      </span>
       {g.link && (
         <a
           href={g.link}
@@ -348,7 +378,7 @@ function ClassRow({ g }) {
           style={{ color: 'var(--cyan)', whiteSpace: 'nowrap', fontWeight: 600 }}
         >Join →</a>
       )}
-      {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
+      {g.showDate && <span className="muted text-sm">{g.showDate}</span>}
     </div>
   )
 }

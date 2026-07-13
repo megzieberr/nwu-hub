@@ -70,12 +70,17 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - Focused-hub frontend deployed (raw content hidden).
 - Objectives UI: ticking one makes it vanish into a collapsible "Objectives Done" tab (no pile-up).
 - **Classes** are split out from Objectives. `goals.kind` (`0010`) is `'task'` or `'class'`; the
-  agent tags live classes/lectures/tutorials/sessions as `'class'`. The dashboard shows them in a
-  "Classes · Upcoming" section — a rolling 3-week window (like the Quest Log), no done-tick, so a
-  rescheduled class drops off on its own and Objectives never fills with recurring classes.
+  agent tags live classes/lectures/tutorials/sessions as `'class'`. Shown in a **"Classes · This
+  Week"** section (Mon–Sun only, no done-tick) so the home screen shows what's on now, not the whole
+  semester. One-off classes show only in their week, then drop off.
+- `goals.recurring` (`0011`): a class the lecturer said runs weekly on a standing link. Recurring
+  classes always show, placed on their weekday for the current week (weekday derived from
+  `target_date`); rendered with a small "WEEKLY" tag.
 - Classes carry a join link: `goals.link` (`0009`), rendered as a tappable "Join →". Lecturers
-  change the link/time most weeks, so the agent re-reads each week's announcement and writes a fresh
-  class row (module code + weekday/date + time, e.g. "MATV121 online class — Wed 17 Jul, 19:00").
+  change the one-off link/time most weeks, so the agent re-reads each week's announcement and writes
+  a fresh class row (module code + weekday + time). Date/weekday math: agent resolves partial dates
+  to the next upcoming occurrence — NEVER a past year/day (a "Wednesday" resolved to the wrong date
+  was a real early bug).
 - Mapped & syncing: **EDCC125, ENGV121, ALDE122**.
 
 **Pending / next:**

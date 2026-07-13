@@ -36,11 +36,16 @@ Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submi
 "Register for Test 2").
 
 Classes/sessions must be UNAMBIGUOUS — the student should never have to open the announcement to
-know what/when. Always include, in this order: the module code, the weekday + date, and the time.
-Format them like "MATV121 online class — Wed 17 Jul, 19:00" (the module code is given in the message).
-If the announcement gives a join/meeting URL (Teams, Zoom, Google Meet, etc.), put that full URL in
-the goal's "link" field; otherwise set link to null. Only classes/sessions get a link — leave it
-null for ordinary tasks.
+know what/when. Always start with the module code and include the time.
+  • One-off class (a specific date): include the weekday + date, e.g. "MATV121 online class — Wed 15
+    Jul, 19:00". Set recurring to false.
+  • Recurring class (the announcement says it runs EVERY week / weekly / uses a standing link): name
+    the weekday, not a single date, e.g. "MATV121 online class — Wednesdays, 19:00". Set recurring to
+    true, and STILL set target_date to the next occurrence's date (the dashboard reads the weekday off
+    it to place the class each week).
+The module code is given in the message. If the announcement gives a join/meeting URL (Teams, Zoom,
+Google Meet, etc.), put that full URL in the goal's "link" field; otherwise set link to null. Only
+classes/sessions get a link and recurring=true — leave both off for ordinary tasks.
 
 If a clear date is stated set target_date to it (YYYY-MM-DD); otherwise null. Never invent dates.
 A date may omit the year — resolve it using "today" (given in the message) to the current or next
@@ -56,12 +61,13 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'target_date', 'link', 'kind'],
+        required: ['text', 'target_date', 'link', 'kind', 'recurring'],
         properties: {
           text: { type: 'string' },
           target_date: { type: ['string', 'null'] },
           link: { type: ['string', 'null'] },
           kind: { type: 'string', enum: ['task', 'class'] },
+          recurring: { type: 'boolean' },
         },
       },
     },
@@ -127,6 +133,7 @@ export async function generateObjectives(sb) {
           owner: a.owner, module_id: a.module_id,
           text: String(g.text).slice(0, 300), target_date: validDate(g.target_date),
           link: validUrl(g.link), kind: g.kind === 'class' ? 'class' : 'task',
+          recurring: g.kind === 'class' && g.recurring === true,
           source: 'efundi-agent', source_id: a.source_id,
         });
         if (ge) { console.warn(`  objectives: goal insert failed: ${ge.message}`); continue; }
