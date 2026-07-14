@@ -4,6 +4,13 @@ _Written 2026-07-14 (Fable audit session). For an Opus 4.8 plan-first implementa
 per PLAN-semester-2.md §7 (sync changes = plan-first). No migration and no RLS change is
 needed — this is worker-only (`sync/index.js`, `sync/write.js`)._
 
+> **✅ DONE 2026-07-14 (commit `db9ea30`).** Primary fix + DiD #2 (benign `23505`) shipped;
+> DiD #1 (storageKey sourceId-hash) deliberately skipped per the plan's own guidance (risk of
+> stranding storage objects on update; primary fix removes the only known collision class).
+> Verified live over two dispatch runs (29313986982 one-time cleanup + all variants skipped, no
+> constraint failures; 29314298657 steady `New: 0, Updated: 0`, zero purges — idempotent). SQL:
+> MATV121 has exactly 9 tutorial-task rows, all clean titles, no duplicates.
+
 ## Status of the wider audit this came from
 
 - PR #6 (Classes section + class-link reconciliation) audited **sound** and verified live
