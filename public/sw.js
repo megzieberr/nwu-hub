@@ -2,7 +2,7 @@
 // open on the phone. No push, no notifications. It caches the app shell so the page opens
 // instantly and survives a flaky connection; live data still comes from Supabase over the
 // network (cross-origin requests below are left untouched).
-const CACHE = 'nwu-hub-v1'
+const CACHE = 'nwu-hub-v2'
 
 self.addEventListener('install', () => self.skipWaiting())
 

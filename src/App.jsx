@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from './lib/supabase'
 import { signInOrUp, signOut } from './lib/auth'
+import { qrSvg } from './lib/qr'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -29,10 +30,16 @@ export default function App() {
   if (loading) return <Centered>Loading…</Centered>
   if (!session) return <Login />
   const isViewer = role === 'viewer'
-  return view.name === 'module' ? (
-    <ModulePage code={view.code} isViewer={isViewer} userId={session.user.id} onBack={() => setView({ name: 'dashboard' })} />
-  ) : (
-    <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
+  return (
+    <>
+      {view.name === 'module' ? (
+        <ModulePage code={view.code} isViewer={isViewer} userId={session.user.id} onBack={() => setView({ name: 'dashboard' })} />
+      ) : (
+        <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
+      )}
+      {/* The Tests & Exams bubble rides above every view. Owner-only — a viewer never sees exam codes. */}
+      {!isViewer && <ExamAccessFab userId={session.user.id} />}
+    </>
   )
 }
 
@@ -906,5 +913,324 @@ function PartyQuests({ parts, setParts, assessments, profiles, userId, accent })
         })}
       </div>
     </Section>
+  )
+}
+
+// =================================================================================================
+// Tests & Exams — the always-reachable home for SALA "Exam opportunity" ACCESS CODES.
+// A floating bubble on every view opens an overlay listing each exam's code (huge, tap-to-copy),
+// its register window (the make-or-break minutes), the write time, the eFundi link + a scannable
+// QR, soonest-first. Rows come from the sync agent (auto) and an owner add/fix form (manual).
+// =================================================================================================
+
+const EXAM_ACCENT = '#ffcf5c'   // warm gold — this bubble should stand out as "don't lose this"
+const hhmm = (t) => (t ? String(t).slice(0, 5) : null)   // "08:30:00" -> "08:30"
+
+// Module-scope so the input's component type is stable across ExamForm re-renders (a nested
+// definition would remount the input every keystroke and drop focus).
+function ExamField({ label, children }) {
+  return (
+    <label className="field" style={{ display: 'block' }}>
+      <span style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: 'var(--muted)', marginBottom: 4 }}>{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function ExamAccessFab({ userId }) {
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState([])
+  const [modules, setModules] = useState([])
+  const [error, setError] = useState('')
+
+  async function load() {
+    const [ex, mods] = await Promise.all([
+      supabase.from('exam_access').select('*, modules(code,colour)')
+        .order('event_date', { ascending: true, nullsFirst: false }).order('created_at'),
+      supabase.from('modules').select('id, code').order('code'),
+    ])
+    if (ex.error) { setError(ex.error.message); return }
+    setError('')
+    setRows(ex.data || [])
+    setModules(mods.data || [])
+  }
+  useEffect(() => { load() }, [])
+
+  // Badge = exams whose write date is within the next 7 days — nag her TOWARD the code, not away.
+  const today = new Date().toISOString().slice(0, 10)
+  const soonBy = addDays(today, 7)
+  const soon = rows.filter((r) => r.event_date && r.event_date >= today && r.event_date <= soonBy).length
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        aria-label="Tests & Exams access codes"
+        title="Tests & Exams — access codes"
+        style={{
+          position: 'fixed', right: 18, bottom: 18, zIndex: 40,
+          width: 58, height: 58, borderRadius: 16, cursor: 'pointer',
+          border: `2px solid ${EXAM_ACCENT}`, background: 'rgba(2,8,22,.82)', color: EXAM_ACCENT,
+          fontSize: 24, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: `0 0 18px rgba(255,207,92,.35), 0 6px 18px rgba(0,0,0,.45)`,
+          backdropFilter: 'blur(4px)',
+        }}
+      >
+        🎫
+        {soon > 0 && (
+          <span style={{
+            position: 'absolute', top: -6, right: -6, minWidth: 22, height: 22, padding: '0 5px',
+            borderRadius: 999, background: 'var(--red)', color: '#fff', fontSize: 12, fontWeight: 800,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '2px solid rgba(2,8,22,.9)',
+          }}>{soon}</span>
+        )}
+      </button>
+      {open && (
+        <ExamAccessOverlay
+          rows={rows} modules={modules} userId={userId} error={error}
+          onClose={() => setOpen(false)} onChanged={load}
+        />
+      )}
+    </>
+  )
+}
+
+function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged }) {
+  const [showPast, setShowPast] = useState(false)
+  const [editing, setEditing] = useState(null)   // null = closed, {} = new, {…} = edit
+  const today = new Date().toISOString().slice(0, 10)
+  // Undated rows count as upcoming (never auto-hidden — she'd want to see a code even with no date).
+  const upcoming = rows.filter((r) => !r.event_date || r.event_date >= today)
+  const past = rows.filter((r) => r.event_date && r.event_date < today)
+
+  return (
+    <div className="overlay p-3 sm:p-6" style={{ flexDirection: 'column' }} onClick={onClose}>
+      <div className="panel w-full max-w-2xl flex flex-col overflow-hidden"
+        style={{ padding: 0, maxHeight: '92vh', borderColor: EXAM_ACCENT }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--line)' }}>
+          <span className="section-label" style={{ color: EXAM_ACCENT }}>🎫 Tests &amp; Exams · Access Codes</span>
+          <div className="flex items-center gap-2">
+            {!editing && (
+              <button onClick={() => setEditing({})} className="btn small"
+                style={{ background: EXAM_ACCENT, borderColor: EXAM_ACCENT, color: '#04121f' }}>＋ Add / fix</button>
+            )}
+            <button onClick={onClose} className="icon-btn">✕</button>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto px-4 py-4 space-y-4" style={{ minHeight: 80 }}>
+          {error && (
+            <div className="panel p-3 text-sm" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+              {error} — if this mentions a missing table, migration 0012 hasn’t been run yet.
+            </div>
+          )}
+
+          {editing && (
+            <ExamForm
+              row={editing} modules={modules} userId={userId}
+              onDone={() => { setEditing(null); onChanged() }}
+              onCancel={() => setEditing(null)}
+            />
+          )}
+
+          {!editing && !upcoming.length && !past.length && (
+            <p className="muted text-sm">No exam codes yet. They appear automatically when eFundi posts an
+              “Exam opportunity”, or add one with ＋ Add / fix.</p>
+          )}
+
+          {upcoming.map((r) => (
+            <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} />
+          ))}
+
+          {past.length > 0 && (
+            <div>
+              <button onClick={() => setShowPast((v) => !v)} className="btn small ghost"
+                aria-expanded={showPast} style={{ borderColor: 'var(--line-strong)', color: 'var(--muted)' }}>
+                {showPast ? '▾' : '▸'} Past ({past.length})
+              </button>
+              {showPast && (
+                <div className="mt-3 space-y-4" style={{ opacity: 0.85 }}>
+                  {past.map((r) => <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} past />)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ExamRow({ r, onEdit, past }) {
+  const [copied, setCopied] = useState(false)
+  const c = r.modules?.colour || EXAM_ACCENT
+  const qr = r.efundi_url ? qrSvg(r.efundi_url, { size: 132 }) : null
+
+  function copyCode() {
+    if (!r.access_code) return
+    navigator.clipboard?.writeText(r.access_code).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="panel p-4" style={{ borderLeft: `3px solid ${c}` }}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+          {r.modules?.code && <span className="mono text-xs" style={{ color: c }}>{r.modules.code}</span>}
+          <span style={{ color: '#eaf4ff', fontWeight: 600 }} className="truncate">{r.title}</span>
+          <span className="chip">{r.kind}</span>
+        </span>
+        <div className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
+          {r.event_date && <span className="muted text-sm">{r.event_date}</span>}
+          <button onClick={onEdit} className="icon-btn" style={{ height: 30, padding: '0 9px', fontSize: 12 }}>✎</button>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col sm:flex-row gap-4">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* THE HERO — the code she types into the Invigilator agent. Big, mono, tap-to-copy. */}
+          {r.access_code ? (
+            <button onClick={copyCode} title="Tap to copy"
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+                border: `1.5px solid ${EXAM_ACCENT}`, borderRadius: 12, padding: '10px 14px',
+                background: 'rgba(2,8,22,.6)',
+              }}>
+              <div className="section-label" style={{ color: 'var(--muted)', marginBottom: 4 }}>
+                Access code {copied ? '· copied ✓' : '· tap to copy'}
+              </div>
+              <div className="mono" style={{ fontSize: 30, fontWeight: 800, letterSpacing: 3, color: EXAM_ACCENT }}>
+                {r.access_code}
+              </div>
+            </button>
+          ) : (
+            <p className="muted text-sm">No access code recorded — tap ✎ to add it.</p>
+          )}
+
+          <div className="mt-3 text-sm space-y-1" style={{ color: 'var(--text)' }}>
+            {(hhmm(r.code_open) || hhmm(r.code_close)) && (
+              <div>⏱ <b>Register window</b> {hhmm(r.code_open) || '—'}–{hhmm(r.code_close) || '—'}
+                <span className="muted"> (enter the code here)</span></div>
+            )}
+            {hhmm(r.start_time) && <div>📝 <b>Write</b> {hhmm(r.start_time)} <span className="muted">(assessment opens)</span></div>}
+            {r.detail && <div className="muted">{r.detail}</div>}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {r.efundi_url && (
+              <a href={r.efundi_url} target="_blank" rel="noopener noreferrer" className="text-sm"
+                style={{ color: 'var(--cyan)', fontWeight: 600 }}>Open on eFundi →</a>
+            )}
+            {r.qr_attachment_url && (
+              <a href={r.qr_attachment_url} target="_blank" rel="noopener noreferrer" className="text-sm"
+                style={{ color: 'var(--cyan)', fontWeight: 600 }}>⭳ Official QR</a>
+            )}
+          </div>
+        </div>
+
+        {/* Scannable QR of the eFundi link — scan → open the assessment on her phone. */}
+        {qr && (
+          <div style={{ flex: '0 0 auto', textAlign: 'center' }}>
+            <div style={{ borderRadius: 10, overflow: 'hidden', width: 132, height: 132 }}
+              dangerouslySetInnerHTML={{ __html: qr }} />
+            <div className="muted text-xs mt-1">scan → eFundi</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Owner-only add/fix form. `row` = {} for a new entry, or an existing row to edit. Empty strings
+// save as null. Deletes are here too (cleanup). This is the manual safety net for the one time the
+// sync agent misses a code or eFundi changes wording.
+function ExamForm({ row, modules, userId, onDone, onCancel }) {
+  const [f, setF] = useState({
+    title: row.title || '', module_id: row.module_id || '', kind: row.kind || 'exam',
+    access_code: row.access_code || '', event_date: row.event_date || '',
+    code_open: hhmm(row.code_open) || '', code_close: hhmm(row.code_close) || '',
+    start_time: hhmm(row.start_time) || '', efundi_url: row.efundi_url || '', detail: row.detail || '',
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+  const isEdit = !!row.id
+
+  async function save() {
+    if (!f.title.trim()) { setErr('Give it a title.'); return }
+    setBusy(true); setErr('')
+    const payload = {
+      owner: userId,
+      module_id: f.module_id || null,
+      kind: f.kind === 'test' ? 'test' : 'exam',
+      title: f.title.trim().slice(0, 200),
+      access_code: f.access_code.trim() || null,
+      event_date: f.event_date || null,
+      code_open: f.code_open || null,
+      code_close: f.code_close || null,
+      start_time: f.start_time || null,
+      efundi_url: f.efundi_url.trim() || null,
+      detail: f.detail.trim() || null,
+    }
+    const q = isEdit
+      ? supabase.from('exam_access').update(payload).eq('id', row.id)
+      : supabase.from('exam_access').insert(payload)
+    const { error } = await q
+    setBusy(false)
+    if (error) { setErr(error.message); return }
+    onDone()
+  }
+
+  async function remove() {
+    if (!isEdit) { onCancel(); return }
+    if (!window.confirm('Delete this exam entry?')) return
+    setBusy(true)
+    const { error } = await supabase.from('exam_access').delete().eq('id', row.id)
+    setBusy(false)
+    if (error) { setErr(error.message); return }
+    onDone()
+  }
+
+  return (
+    <div className="system p-4" style={{ borderColor: EXAM_ACCENT }}>
+      <div className="section-label mb-3" style={{ color: EXAM_ACCENT }}>{isEdit ? 'Edit exam' : 'New exam'}</div>
+      {err && <p className="text-sm mb-3" style={{ color: 'var(--red)' }}>{err}</p>}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <ExamField label="Title"><input className="input" value={f.title} onChange={set('title')} placeholder="MATH111 Exam opportunity 2" /></ExamField>
+        <ExamField label="Module">
+          <select className="input" value={f.module_id} onChange={set('module_id')}>
+            <option value="">— none —</option>
+            {modules.map((m) => <option key={m.id} value={m.id}>{m.code}</option>)}
+          </select>
+        </ExamField>
+        <ExamField label="Access code"><input className="input mono" value={f.access_code} onChange={set('access_code')} placeholder="06f1d051" /></ExamField>
+        <ExamField label="Kind">
+          <select className="input" value={f.kind} onChange={set('kind')}>
+            <option value="exam">exam</option>
+            <option value="test">test</option>
+          </select>
+        </ExamField>
+        <ExamField label="Write date"><input className="input" type="date" value={f.event_date} onChange={set('event_date')} /></ExamField>
+        <ExamField label="Write time"><input className="input" type="time" value={f.start_time} onChange={set('start_time')} /></ExamField>
+        <ExamField label="Register opens"><input className="input" type="time" value={f.code_open} onChange={set('code_open')} /></ExamField>
+        <ExamField label="Register closes"><input className="input" type="time" value={f.code_close} onChange={set('code_close')} /></ExamField>
+      </div>
+      <div className="mt-3"><ExamField label="eFundi link"><input className="input" value={f.efundi_url} onChange={set('efundi_url')} placeholder="https://efundi.nwu.ac.za/x/…" /></ExamField></div>
+      <div className="mt-3"><ExamField label="Note (optional)"><input className="input" value={f.detail} onChange={set('detail')} /></ExamField></div>
+      <div className="flex items-center justify-between mt-4 gap-2">
+        <button onClick={remove} disabled={busy} className="btn small ghost" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+          {isEdit ? 'Delete' : 'Cancel'}
+        </button>
+        <div className="flex gap-2">
+          {isEdit && <button onClick={onCancel} disabled={busy} className="btn small ghost">Cancel</button>}
+          <button onClick={save} disabled={busy} className="btn small"
+            style={{ background: EXAM_ACCENT, borderColor: EXAM_ACCENT, color: '#04121f' }}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

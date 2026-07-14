@@ -11,6 +11,7 @@
 //   • Any per-announcement error -> leave it unprocessed and move on (retried next run).
 
 import Anthropic from '@anthropic-ai/sdk';
+import { parseExamAccess } from './exam-parse.js';
 
 const MODEL = 'claude-haiku-4-5';   // user-chosen for cost; supports structured outputs
 
@@ -119,12 +120,32 @@ export async function generateObjectives(sb) {
 
   const anthropic = new Anthropic();   // reads ANTHROPIC_API_KEY from env
   const today = new Date().toISOString().slice(0, 10);
-  let created = 0, updated = 0;
+  let created = 0, updated = 0, exams = 0;
 
   for (const a of pending) {
     try {
       const mod = a.modules || {};
       const body = toText(a.body_html);
+
+      // Exam-access pass (Feature A) — deterministic, runs before the LLM and independently of it.
+      // Its own try so a parse/write hiccup never blocks the objectives goal. Upsert on
+      // (source, source_id) makes it idempotent; each announcement is processed once anyway.
+      if (a.source_id) {
+        try {
+          const ex = parseExamAccess(a.title, body, today);
+          if (ex) {
+            const { error: xe } = await sb.from('exam_access').upsert({
+              owner: a.owner, module_id: a.module_id,
+              kind: ex.kind, title: ex.title, access_code: ex.access_code,
+              code_open: ex.code_open, code_close: ex.code_close, start_time: ex.start_time,
+              event_date: ex.event_date, efundi_url: ex.efundi_url,
+              source: 'efundi-exam', source_id: a.source_id,
+            }, { onConflict: 'source,source_id' });
+            if (xe) console.warn(`  exam-access: upsert failed: ${xe.message}`);
+            else exams++;
+          }
+        } catch (xe) { console.warn(`  exam-access: "${a.title}" failed: ${xe?.message ?? xe}`); }
+      }
 
       // The agent's memory of what it already listed: the open classes for this module. Re-read each
       // announcement (cheap, single-user) so a class inserted earlier THIS run is visible too. The
@@ -204,6 +225,7 @@ export async function generateObjectives(sb) {
     }
   }
 
-  console.log(`✓ Objectives agent: ${created} new + ${updated} updated goal(s) from ${pending.length} new announcement(s).`);
+  console.log(`✓ Objectives agent: ${created} new + ${updated} updated goal(s)`
+    + `${exams ? `, ${exams} exam-access row(s)` : ''} from ${pending.length} new announcement(s).`);
   return created;
 }
