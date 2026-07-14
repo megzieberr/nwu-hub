@@ -60,7 +60,17 @@ always null for tasks.)
 
 If a clear date is stated set target_date to it (YYYY-MM-DD); otherwise null. Never invent dates.
 A date may omit the year — resolve it using "today" (given in the message) to the current or next
-upcoming occurrence, and NEVER output a year earlier than today's. Return at most 3 goals.`;
+upcoming occurrence, and NEVER output a year earlier than today's.
+
+Also set two fields that drive phone reminders:
+  • "target_time" — the class/test start time as "HH:MM" (24-hour), if the announcement gives one;
+    otherwise null. (A class at "19:00" → "19:00"; "2pm" → "14:00".) This is the SAME time you put in
+    the text — now also as data so the reminder can fire before it.
+  • "is_test" — true ONLY when the goal is the student SITTING a written test/exam/quiz at a set time
+    (e.g. "Write Test 1", "MATH121 semester test"). false for everything else, including registrations,
+    submissions, prep and classes. When true the student gets a morning-of reminder.
+
+Return at most 3 goals.`;
 
 const SCHEMA = {
   type: 'object',
@@ -72,13 +82,15 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'target_date', 'link', 'kind', 'recurring', 'updates_id'],
+        required: ['text', 'target_date', 'target_time', 'link', 'kind', 'recurring', 'is_test', 'updates_id'],
         properties: {
           text: { type: 'string' },
           target_date: { type: ['string', 'null'] },
+          target_time: { type: ['string', 'null'] },   // "HH:MM" 24h — for the pre-class reminder
           link: { type: ['string', 'null'] },
           kind: { type: 'string', enum: ['task', 'class'] },
           recurring: { type: 'boolean' },
+          is_test: { type: 'boolean' },                  // true → student is SITTING a test/exam (morning-of reminder)
           // The id of an EXISTING class this announcement updates (adds a link / changes the time),
           // or null for a brand-new goal. Prevents duplicate class rows when the link arrives late.
           updates_id: { type: ['string', 'null'] },
@@ -95,6 +107,13 @@ function toText(html) {
 
 function validDate(d) {
   return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+// "HH:MM" (24h) → normalized "HH:MM" for a Postgres time column; anything else → null.
+function validTime(t) {
+  if (typeof t !== 'string') return null;
+  const m = t.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
 }
 
 // Only accept real http(s) URLs; anything else (a stray sentence, a mailto, null) -> no link.
@@ -195,6 +214,8 @@ export async function generateObjectives(sb) {
           const patch = { kind: 'class' };
           if (g.text) patch.text = String(g.text).slice(0, 300);
           if (validDate(g.target_date)) patch.target_date = validDate(g.target_date);
+          // Time is sticky like the link — a new stated time updates it, a time-less update never wipes it.
+          if (validTime(g.target_time)) patch.target_time = validTime(g.target_time);
           // Link is sticky: a newer real link replaces the old one, but a link-less update (e.g. a
           // time change) never wipes a link the lecturer already posted.
           if (validUrl(g.link)) patch.link = validUrl(g.link);
@@ -209,8 +230,11 @@ export async function generateObjectives(sb) {
         const { error: ge } = await sb.from('goals').insert({
           owner: a.owner, module_id: a.module_id,
           text: String(g.text).slice(0, 300), target_date: validDate(g.target_date),
+          target_time: validTime(g.target_time),
           link: validUrl(g.link), kind: g.kind === 'class' ? 'class' : 'task',
           recurring: g.kind === 'class' && g.recurring === true,
+          // Only a task can be a test sitting; a class is never a "test" for reminder purposes.
+          is_test: g.kind !== 'class' && g.is_test === true,
           source: 'efundi-agent', source_id: a.source_id,
         });
         if (ge) { console.warn(`  objectives: goal insert failed: ${ge.message}`); continue; }

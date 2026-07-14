@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from './lib/supabase'
 import { signInOrUp, signOut } from './lib/auth'
 import { qrSvg } from './lib/qr'
+import { pushState, enablePush, disablePush } from './lib/push'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -360,7 +361,77 @@ function Dashboard({ isViewer, onOpenModule }) {
             </Section>
           )
         })()}
+
+        {!isViewer && <RemindersCard />}
       </main>
+    </div>
+  )
+}
+
+// 🔔 Reminders — owner-only opt-in for push notifications (classes ~45 min before, tests/exams the
+// morning of). Subscribes THIS device and stores it under owner-RLS; the send-push Edge Function on
+// pg_cron does the actual firing. Hidden until the VAPID public key is set AND the browser supports
+// push (on iPhone that means the hub is installed to the Home Screen) — so it never shows a dead toggle.
+function RemindersCard() {
+  const [state, setState] = useState('loading')   // loading|unsupported|unconfigured|blocked|on|off
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => { pushState().then(setState) }, [])
+
+  // Nothing to offer: no push support (or not installed on iOS), or the key hasn't been set yet.
+  if (state === 'loading' || state === 'unsupported' || state === 'unconfigured') return null
+
+  async function turnOn() {
+    setBusy(true); setErr('')
+    const r = await enablePush()
+    setBusy(false)
+    if (!r.ok) {
+      setErr(r.reason === 'denied' ? 'Permission was declined — allow notifications to turn these on.'
+        : r.reason === 'unsupported' ? 'This device can’t do reminders.'
+        : `Could not turn on reminders — ${r.reason}`)
+      setState(await pushState())
+      return
+    }
+    setState('on')
+  }
+  async function turnOff() {
+    setBusy(true); setErr('')
+    await disablePush()
+    setBusy(false)
+    setState('off')
+  }
+
+  return (
+    <div className="panel bracket p-5">
+      <div className="flex items-center gap-4">
+        <div style={{
+          width: 44, height: 44, borderRadius: 12, flex: '0 0 auto', fontSize: 22,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: `2px solid ${state === 'on' ? 'var(--cyan)' : 'var(--line-strong)'}`,
+          color: state === 'on' ? 'var(--cyan)' : 'var(--muted)', background: 'rgba(2,8,22,.5)',
+        }}>🔔</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="section-label">Reminders</div>
+          <div className="text-sm muted mt-1">
+            {state === 'on' ? 'On for this device — classes ~45 min before, tests & exams the morning of.'
+              : state === 'blocked' ? 'Notifications are blocked in your browser/phone settings. Allow them there, then reload.'
+              : 'Get a push on this device before classes, and the morning of a test or exam (with the access code).'}
+          </div>
+          {err && <div className="text-sm mt-1" style={{ color: 'var(--red)' }}>{err}</div>}
+        </div>
+        {state !== 'blocked' && (
+          state === 'on'
+            ? <button onClick={turnOff} disabled={busy} className="btn small ghost"
+                style={{ borderColor: 'var(--line-strong)', color: 'var(--muted)' }}>
+                {busy ? '…' : 'Turn off'}
+              </button>
+            : <button onClick={turnOn} disabled={busy} className="btn small"
+                style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)', whiteSpace: 'nowrap' }}>
+                {busy ? '…' : '🔔 Turn on'}
+              </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -955,6 +1026,21 @@ function ExamAccessFab({ userId }) {
     setModules(mods.data || [])
   }
   useEffect(() => { load() }, [])
+
+  // Deep-link: an exam-morning notification opens the hub at #exams — pop the overlay straight open
+  // (on cold start and, via hashchange, when the notification focuses an already-open tab), then
+  // clear the hash so a later reload doesn't re-open it.
+  useEffect(() => {
+    const openIfHash = () => {
+      if (window.location.hash === '#exams') {
+        setOpen(true)
+        history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+    }
+    openIfHash()
+    window.addEventListener('hashchange', openIfHash)
+    return () => window.removeEventListener('hashchange', openIfHash)
+  }, [])
 
   // Badge = exams whose write date is within the next 7 days — nag her TOWARD the code, not away.
   const today = new Date().toISOString().slice(0, 10)
