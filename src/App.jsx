@@ -362,7 +362,7 @@ function Dashboard({ isViewer, onOpenModule }) {
           )
         })()}
 
-        {!isViewer && <RemindersCard />}
+        <RemindersCard />
       </main>
     </div>
   )

@@ -98,15 +98,11 @@ Deno.serve(async (req) => {
   let body: { test?: boolean } = {};
   try { body = await req.json(); } catch (_) { body = {}; }
 
-  // All devices, grouped by owner (single-user hub, but keep it correct).
+  // Every subscribed device. This hub has ONE owner (Megan) whose schedule drives all reminders;
+  // read-only viewers (Lize) who opt in get the SAME class/test/exam pings — Megan's call, and the
+  // SALA exam codes are class-wide (the lecturer posts one for everyone), so nothing private leaks.
   const { data: subRows } = await admin.from("push_subscriptions").select("id, owner, subscription");
   const subs = (subRows ?? []) as Sub[];
-  const subsByOwner = new Map<string, Sub[]>();
-  for (const s of subs) {
-    const list = subsByOwner.get(s.owner) ?? [];
-    list.push(s);
-    subsByOwner.set(s.owner, list);
-  }
 
   // --- Test mode: ping every device once. ---------------------------------
   if (body.test === true) {
@@ -119,8 +115,7 @@ Deno.serve(async (req) => {
 
   const now = saNow();
   let fired = 0;
-  const send = (owner: string, payload: Record<string, unknown>) =>
-    sendTo(subsByOwner.get(owner) ?? [], payload);
+  const sendAll = (payload: Record<string, unknown>) => sendTo(subs, payload);
 
   // --- EXAMS (exam_access) — 07:00 on event_date, body carries the access code. -----------------
   // Track which (owner|module|date) got an exam ping so a matching is_test goal doesn't double-fire.
@@ -137,7 +132,7 @@ Deno.serve(async (req) => {
       const win = x.code_open && x.code_close ? ` · register ${hhmm(x.code_open)}–${hhmm(x.code_close)}` : "";
       const write = x.start_time ? ` · write ${hhmm(x.start_time)}` : "";
       const modCode = (x.modules as { code?: string } | null)?.code ?? "";
-      const res = await send(x.owner, {
+      const res = await sendAll({
         title: `${modCode ? modCode + " " : ""}exam today`,
         body: `${x.title}${code}${win}${write}`.slice(0, 300),
         url: EXAM_URL, tag: `nwu-exam-${x.id}`,
@@ -172,7 +167,7 @@ Deno.serve(async (req) => {
     if (!due) continue;
 
     const when = g.target_time ? ` at ${hhmm(g.target_time)}` : "";
-    const res = await send(g.owner, {
+    const res = await sendAll({
       title: "Class reminder",
       body: `${g.text}${when}`.slice(0, 300),
       url: HUB_URL, tag: `nwu-class-${g.id}`,
@@ -196,7 +191,7 @@ Deno.serve(async (req) => {
         await admin.from("goals").update({ reminded_at: new Date().toISOString() }).eq("id", g.id);
         continue;
       }
-      const res = await send(g.owner, {
+      const res = await sendAll({
         title: "Test today", body: `${g.text}`.slice(0, 300), url: HUB_URL, tag: `nwu-test-${g.id}`,
       });
       if (res.sent > 0) {

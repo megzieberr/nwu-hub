@@ -11,8 +11,10 @@
 --    2. deployed the send-push Edge Function, and
 --    3. set its secrets (including CRON_SECRET).
 --
---  BEFORE running, replace the ONE placeholder below:
+--  BEFORE running, replace the ONE placeholder IN THE JOB BODY BELOW (line with x-cron-secret):
 --    <CRON_SECRET>  -> the EXACT same value you set as the CRON_SECRET Edge secret.
+--  ⚠ Never commit this file with the real secret in it — the repo is public. Put it back to
+--     <CRON_SECRET> after running (the live job already holds the real value).
 --  (The project ref aefjicdxeflqnquiebvc is already filled in — it's public, it's in your URL.)
 -- ============================================================
 
