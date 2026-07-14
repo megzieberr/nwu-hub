@@ -38,8 +38,9 @@ export default function App() {
       ) : (
         <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
       )}
-      {/* The Tests & Exams bubble rides above every view. Owner-only — a viewer never sees exam codes. */}
-      {!isViewer && <ExamAccessFab userId={session.user.id} />}
+      {/* The Tests & Exams bubble rides above every view. Lize (viewer) sees the codes too — they're
+          class-wide — but read-only: no add/fix, no editing (enforced by RLS and hidden in the UI). */}
+      <ExamAccessFab userId={session.user.id} isViewer={isViewer} />
     </>
   )
 }
@@ -1008,7 +1009,7 @@ function ExamField({ label, children }) {
   )
 }
 
-function ExamAccessFab({ userId }) {
+function ExamAccessFab({ userId, isViewer }) {
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState([])
   const [modules, setModules] = useState([])
@@ -1074,7 +1075,7 @@ function ExamAccessFab({ userId }) {
       </button>
       {open && (
         <ExamAccessOverlay
-          rows={rows} modules={modules} userId={userId} error={error}
+          rows={rows} modules={modules} userId={userId} error={error} isViewer={isViewer}
           onClose={() => setOpen(false)} onChanged={load}
         />
       )}
@@ -1082,7 +1083,7 @@ function ExamAccessFab({ userId }) {
   )
 }
 
-function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged }) {
+function ExamAccessOverlay({ rows, modules, userId, error, isViewer, onClose, onChanged }) {
   const [showPast, setShowPast] = useState(false)
   const [editing, setEditing] = useState(null)   // null = closed, {} = new, {…} = edit
   const today = new Date().toISOString().slice(0, 10)
@@ -1097,7 +1098,7 @@ function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged })
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--line)' }}>
           <span className="section-label" style={{ color: EXAM_ACCENT }}>🎫 Tests &amp; Exams · Access Codes</span>
           <div className="flex items-center gap-2">
-            {!editing && (
+            {!editing && !isViewer && (
               <button onClick={() => setEditing({})} className="btn small"
                 style={{ background: EXAM_ACCENT, borderColor: EXAM_ACCENT, color: '#04121f' }}>＋ Add / fix</button>
             )}
@@ -1122,11 +1123,11 @@ function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged })
 
           {!editing && !upcoming.length && !past.length && (
             <p className="muted text-sm">No exam codes yet. They appear automatically when eFundi posts an
-              “Exam opportunity”, or add one with ＋ Add / fix.</p>
+              “Exam opportunity”{isViewer ? '.' : ', or add one with ＋ Add / fix.'}</p>
           )}
 
           {upcoming.map((r) => (
-            <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} />
+            <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} canEdit={!isViewer} />
           ))}
 
           {past.length > 0 && (
@@ -1137,7 +1138,7 @@ function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged })
               </button>
               {showPast && (
                 <div className="mt-3 space-y-4" style={{ opacity: 0.85 }}>
-                  {past.map((r) => <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} past />)}
+                  {past.map((r) => <ExamRow key={r.id} r={r} onEdit={() => setEditing(r)} past canEdit={!isViewer} />)}
                 </div>
               )}
             </div>
@@ -1148,7 +1149,7 @@ function ExamAccessOverlay({ rows, modules, userId, error, onClose, onChanged })
   )
 }
 
-function ExamRow({ r, onEdit, past }) {
+function ExamRow({ r, onEdit, past, canEdit }) {
   const [copied, setCopied] = useState(false)
   const c = r.modules?.colour || EXAM_ACCENT
   const qr = r.efundi_url ? qrSvg(r.efundi_url, { size: 132 }) : null
@@ -1170,7 +1171,7 @@ function ExamRow({ r, onEdit, past }) {
         </span>
         <div className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
           {r.event_date && <span className="muted text-sm">{r.event_date}</span>}
-          <button onClick={onEdit} className="icon-btn" style={{ height: 30, padding: '0 9px', fontSize: 12 }}>✎</button>
+          {canEdit && <button onClick={onEdit} className="icon-btn" style={{ height: 30, padding: '0 9px', fontSize: 12 }}>✎</button>}
         </div>
       </div>
 
@@ -1192,7 +1193,7 @@ function ExamRow({ r, onEdit, past }) {
               </div>
             </button>
           ) : (
-            <p className="muted text-sm">No access code recorded — tap ✎ to add it.</p>
+            <p className="muted text-sm">No access code recorded{canEdit ? ' — tap ✎ to add it.' : ' yet.'}</p>
           )}
 
           <div className="mt-3 text-sm space-y-1" style={{ color: 'var(--text)' }}>
