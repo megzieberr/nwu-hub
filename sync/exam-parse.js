@@ -64,3 +64,21 @@ export function parseExamAccess(title, body, today) {
     efundi_url: url && url.replace(/[).,]+$/, ''),
   };
 }
+
+// SAST (UTC+2, no DST) calendar date 'YYYY-MM-DD' of a timestamp, or null on empty/bad input.
+export function saDate(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
+// The exam's calendar date for the reminder. The REAL SALA body carries no date (parseExamAccess then
+// yields event_date=null), so fall back to the SAST date the announcement was POSTED — SALA releases
+// the code the exam morning, so posted-date == exam-date. (Residual: an evening-before post dates one
+// day early; send-push's created-today clause is the net for that.) Returns 'YYYY-MM-DD' or null.
+export function resolveEventDate(parsedDate, postedAt) {
+  return parsedDate || saDate(postedAt) || null;
+}

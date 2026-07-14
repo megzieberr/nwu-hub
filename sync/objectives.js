@@ -11,7 +11,7 @@
 //   • Any per-announcement error -> leave it unprocessed and move on (retried next run).
 
 import Anthropic from '@anthropic-ai/sdk';
-import { parseExamAccess } from './exam-parse.js';
+import { parseExamAccess, resolveEventDate } from './exam-parse.js';
 
 const MODEL = 'claude-haiku-4-5';   // user-chosen for cost; supports structured outputs
 
@@ -130,7 +130,7 @@ export async function generateObjectives(sb) {
 
   const { data: pending, error } = await sb
     .from('announcements')
-    .select('id, owner, module_id, title, body_html, source_id, modules(code, title)')
+    .select('id, owner, module_id, title, body_html, posted_at, source_id, modules(code, title)')
     .eq('source', 'efundi')
     .is('processed_at', null)
     .limit(50);
@@ -157,7 +157,9 @@ export async function generateObjectives(sb) {
               owner: a.owner, module_id: a.module_id,
               kind: ex.kind, title: ex.title, access_code: ex.access_code,
               code_open: ex.code_open, code_close: ex.code_close, start_time: ex.start_time,
-              event_date: ex.event_date, efundi_url: ex.efundi_url,
+              // The real SALA body has no date -> ex.event_date is null; fall back to the posted date
+              // (SALA posts the code the exam morning) so send-push's .eq('event_date', today) can match.
+              event_date: resolveEventDate(ex.event_date, a.posted_at), efundi_url: ex.efundi_url,
               source: 'efundi-exam', source_id: a.source_id,
             }, { onConflict: 'source,source_id' });
             if (xe) console.warn(`  exam-access: upsert failed: ${xe.message}`);

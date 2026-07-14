@@ -1,6 +1,6 @@
 // verify-exam-extract.mjs — checks parseExamAccess against the real SALA template (from the plan's
 // MATH111 sample) plus negative cases. Run: node sync/verify-exam-extract.mjs
-import { parseExamAccess } from './exam-parse.js';
+import { parseExamAccess, resolveEventDate } from './exam-parse.js';
 
 let fail = 0;
 const ok = (name, cond, got) => { console.log(`${cond ? '✓' : '✗ FAIL'}  ${name}${cond ? '' : `  (got: ${JSON.stringify(got)})`}`); if (!cond) fail++; };
@@ -35,6 +35,25 @@ ok('test-titled -> kind=test', t2 && t2.kind === 'test', t2 && t2.kind);
 
 const isoDate = parseExamAccess('X', 'Exam QR Access Code: deadbeef on 2026-09-01.', today);
 ok('ISO date parses', isoDate && isoDate.event_date === '2026-09-01', isoDate && isoDate.event_date);
+
+// --- the REAL SALA body has NO date -> event_date must be null (the bug the fixture above hid) ---
+// (values fake; shape mirrors the actual MATH111 "Exam opportunity" announcement, which carries no date)
+const dateless = 'Dear students. Exam QR Access Code: cccc3333 . Enter this code in the Invigilator Web '
+  + 'Browser Agent. The QR Code will open at 08:30 and close at 08:59. The assessment will be available '
+  + 'at 09:00 under eFundi Assignments. Link: https://efundi.nwu.ac.za/x/EXAMPLE2 . Good luck.';
+const dl = parseExamAccess('MATH111 Exam opportunity 2 - (QR code attached)', dateless, today);
+ok('dateless real body still parses (has the code)', !!dl && dl.access_code === 'cccc3333', dl && dl.access_code);
+ok('dateless real body -> event_date = null', dl && dl.event_date === null, dl && dl.event_date);
+
+// --- resolveEventDate: null parsed date falls back to the posted date (in SAST) ---
+ok('resolveEventDate keeps a parsed date', resolveEventDate('2026-07-22', '2026-07-20T06:00:00Z') === '2026-07-22');
+ok('resolveEventDate falls back to posted SAST date',
+  resolveEventDate(null, '2026-07-22T05:30:00Z') === '2026-07-22',   // 05:30Z = 07:30 SAST, same day
+  resolveEventDate(null, '2026-07-22T05:30:00Z'));
+ok('resolveEventDate late-night post stays on its SAST day',
+  resolveEventDate(null, '2026-07-21T22:30:00Z') === '2026-07-22',   // 22:30Z = 00:30 SAST next day
+  resolveEventDate(null, '2026-07-21T22:30:00Z'));
+ok('resolveEventDate null + no posted date -> null', resolveEventDate(null, null) === null);
 
 // --- negatives (must NOT create a row) ---
 ok('ordinary announcement -> null', parseExamAccess('Welcome to the module', 'Please read the study guide. No exam yet.', today) === null);

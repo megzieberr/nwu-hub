@@ -5,8 +5,10 @@
 // `reminded_at` so nothing ever fires twice:
 //   • CLASSES  (goals.kind='class')     — ~45 min before target_time on the class's day. Recurring
 //                                          classes fire weekly on their weekday. No time → 07:00 nudge.
-//   • EXAMS    (exam_access rows)        — 07:00 SAST on event_date; the body carries the ACCESS CODE +
-//                                          register window (this is the row that has the code), and the
+//   • EXAMS    (exam_access rows)        — fires on the first run that SEES a today's row (dated today,
+//                                          or still-undated but created today — SALA posts the code the
+//                                          exam morning) while the register window is still open. The
+//                                          body carries the ACCESS CODE + register window, and the
 //                                          notification deep-links to the Tests & Exams tab (#exams).
 //   • TESTS    (goals.is_test=true)      — 07:00 SAST on target_date; SKIPPED when an exam_access row
 //                                          already covers that module+date (the code reminder wins).
@@ -117,17 +119,37 @@ Deno.serve(async (req) => {
   let fired = 0;
   const sendAll = (payload: Record<string, unknown>) => sendTo(subs, payload);
 
-  // --- EXAMS (exam_access) — 07:00 on event_date, body carries the access code. -----------------
-  // Track which (owner|module|date) got an exam ping so a matching is_test goal doesn't double-fire.
+  // --- EXAMS (exam_access) — the code-bearing reminder. -----------------------------------------
+  // SALA posts the access code the exam MORNING, so the row usually lands ~08:00 (after the sync) with
+  // NO date in the body. So we don't wait for a fixed 07:00 or insist event_date is set: fire on the
+  // first run that sees a row for TODAY (event_date==today, or a still-undated row CREATED today) while
+  // the register window hasn't closed — that gets the code onto her phone before the 08:30–08:59 slot.
+  // (Residual: an evening-before post gets yesterday's date and won't match — can't be fixed from a
+  // dateless body.) Track (owner|module|date) so a matching is_test goal stays quiet.
   const examCovered = new Set<string>();
-  if (now.minutes >= MORNING_MIN) {
+  {
     const { data: exams } = await admin
       .from("exam_access")
-      .select("id, owner, module_id, title, access_code, code_open, code_close, start_time, event_date, reminded_at, modules(code)")
-      .eq("event_date", now.date);
+      .select("id, owner, module_id, title, access_code, code_open, code_close, start_time, event_date, created_at, reminded_at, modules(code)")
+      .or(`event_date.eq.${now.date},event_date.is.null`);
     for (const x of exams ?? []) {
+      // Relevant today? A dated row must be dated today; an undated row must have been CREATED today
+      // (SALA's exam-morning post) — this excludes historical undated rows and manual future exams.
+      const relevant = x.event_date === now.date
+        || (x.event_date === null && saDateOf(x.created_at) === now.date);
+      if (!relevant) continue;
+
+      // This exam owns today's sitting for dedup — record BEFORE the reminded check so a late-synced
+      // is_test goal is suppressed even when the exam already fired on an earlier run this morning.
+      const effDate = x.event_date ?? now.date;
+      examCovered.add(`${x.owner}|${x.module_id}|${effDate}`);
       if (saDateOf(x.reminded_at) === now.date) continue;            // already reminded today
-      examCovered.add(`${x.owner}|${x.module_id}|${x.event_date}`);
+
+      // Fire while the register window is still open (now < code_close). No window known → 07:00 nudge.
+      const closeMin = timeMin(x.code_close);
+      const due = closeMin !== null ? now.minutes < closeMin : now.minutes >= MORNING_MIN;
+      if (!due) continue;
+
       const code = x.access_code ? ` — code ${x.access_code}` : "";
       const win = x.code_open && x.code_close ? ` · register ${hhmm(x.code_open)}–${hhmm(x.code_close)}` : "";
       const write = x.start_time ? ` · write ${hhmm(x.start_time)}` : "";
