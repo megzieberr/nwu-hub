@@ -583,6 +583,11 @@ function ModulePage({ code, isViewer, userId, onBack }) {
             {mod.nqf_level != null && <span className="chip">NQF {mod.nqf_level}</span>}
             {mod.participation_pct != null && <span className="chip">Participation {mod.participation_pct}% · Exam {mod.exam_pct}%</span>}
             {mod.pass_min != null && <span className="chip">Pass {mod.pass_min}% · exam min {mod.exam_min}%</span>}
+            {mod.lecturer_name != null && (
+              <span className="chip">
+                {mod.lecturer_email ? <a href={`mailto:${mod.lecturer_email}`} style={{ color: 'inherit' }}>{mod.lecturer_name}</a> : mod.lecturer_name}
+              </span>
+            )}
           </div>
         </div>
 
