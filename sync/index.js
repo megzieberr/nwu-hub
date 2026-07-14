@@ -7,6 +7,7 @@ import { login, AuthError } from './auth.js';
 import { listSites, fetchSiteAnnouncements, fetchSiteAssignments, fetchSiteContent, fetchSiteLessons } from './fetch-efundi.js';
 import {
   makeSupabase, resolveOwner, loadSiteMap, loadSiteTitles, autoMapSites, existingHashes,
+  loadModuleResourceRows, nameKey,
   syncAnnouncements, syncAssignments, syncContent, purgeVideos, purgeDuplicateResources,
 } from './write.js';
 import { generateObjectives } from './objectives.js';
@@ -96,12 +97,28 @@ async function main() {
         const candidates = [...resFiles, ...lessonFiles].sort((a, b) =>
           (prevRes.has(a.sourceId) ? 0 : 1) - (prevRes.has(b.sourceId) ? 0 : 1)
           || plusCount(a.title) - plusCount(b.title));
+        // The clean twin of a '+'-artifact can live ONLY in the DB now: when a lecturer
+        // restructures a site, the old file path stops being served and eFundi offers just the
+        // '+' upload variant under a NEW sourceId. The dedupe below sees only this fetch, so it
+        // can't tell that variant is a duplicate of an already-synced document — it would insert
+        // it as "new" every run, then purgeDuplicateResources deletes it again next run (churn),
+        // or it collides on storage_path (hard fail). So seed byName with the nameKeys of THIS
+        // module's synced rows whose sourceId is no longer in the fetch: a served variant of one
+        // of those is then skipped as a duplicate. A row still served under its own sourceId is
+        // NOT seeded (its id IS in the fetch), so real hash-change updates still flow.
+        const fetchedIds = new Set(candidates.map(c => c.sourceId).filter(Boolean));
+        const dbOnlyNames = new Set(
+          (await loadModuleResourceRows(sb, moduleId))
+            .filter(r => !fetchedIds.has(r.source_id))
+            .map(r => nameKey(r.title))
+        );
         for (const f of candidates) {
           if (!f.sourceId || byId.has(f.sourceId)) continue;
-          const nameKey = String(f.title).replace(/[+\s]+/g, ' ').trim().toLowerCase();
-          if (byName.has(nameKey)) { console.log(`    · same document linked twice on eFundi, skipped: ${f.title}`); continue; }
+          const key = nameKey(f.title);
+          if (dbOnlyNames.has(key)) { console.log(`    · duplicate of a synced document, skipped: ${f.title}`); continue; }
+          if (byName.has(key)) { console.log(`    · same document linked twice on eFundi, skipped: ${f.title}`); continue; }
           byId.set(f.sourceId, f);
-          byName.add(nameKey);
+          byName.add(key);
         }
         const files = [...byId.values()];
         if (lessonFiles.length) console.log(`    (${lessonFiles.length} file(s) from Lessons; ${resFiles.length} from Resources)`);

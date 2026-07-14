@@ -22,6 +22,16 @@ export function hash(obj) {
   return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
 }
 
+// nameKey — normalize a resource title for duplicate detection: collapse every '+'/whitespace
+// run to a single space, trim, lowercase. This is the ONE definition; the fetch-side dedupe
+// (index.js), the DB-only dedupe seed (index.js), and purgeDuplicateResources below all import
+// it, so they can never drift out of lockstep (a past bug: two dedupers with different worlds
+// oscillated forever). "MATV 121 Tutorial Task 2.pdf" and "MATV+121+Tutorial+Task+2.pdf" both
+// normalize to "matv 121 tutorial task 2.pdf".
+export function nameKey(title) {
+  return String(title).replace(/[+\s]+/g, ' ').trim().toLowerCase();
+}
+
 const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|mpe?g|3gp|ogv|ts)$/i;
 
 // Enforce "no videos in the hub": remove any eFundi-sourced video files (storage object + row).
@@ -56,7 +66,7 @@ export async function purgeDuplicateResources(sb) {
   const plusCount = t => (String(t).match(/\+/g) || []).length;
   const groups = new Map();
   for (const r of data ?? []) {
-    const key = `${r.module_id}|${String(r.title).replace(/[+\s]+/g, ' ').trim().toLowerCase()}`;
+    const key = `${r.module_id}|${nameKey(r.title)}`;
     (groups.get(key) ?? groups.set(key, []).get(key)).push(r);
   }
   const losers = [];
@@ -153,6 +163,17 @@ export async function existingHashes(sb, table) {
   return m;
 }
 
+// loadModuleResourceRows — (source_id, title) of one module's synced eFundi resources, for the
+// DB-only dedupe seed in index.js. Module-scoped on purpose (single per-site query, not a
+// second full-table scan). A load failure is non-fatal: the seed is empty, so the fetch-side
+// dedupe just behaves as it did before this fix (churn), never worse.
+export async function loadModuleResourceRows(sb, moduleId) {
+  const { data, error } = await sb.from('resources')
+    .select('source_id, title').eq('source', 'efundi').eq('module_id', moduleId);
+  if (error) { console.warn(`loadModuleResourceRows: ${error.message}`); return []; }
+  return data ?? [];
+}
+
 export async function syncAnnouncements(sb, owner, moduleId, items, prev, counters, now) {
   for (const it of items) {
     if (!it.sourceId) continue;
@@ -232,7 +253,17 @@ export async function syncContent(sb, client, owner, moduleId, items, prev, coun
         size_bytes: it.size ?? buf.length,
         source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
       }, { onConflict: 'source,source_id' });
-      if (error) throw error;
+      if (error) {
+        // 23505 on resources_storage_path_key = two eFundi sourceIds sanitised to one storage
+        // key (a residual duplicate the fetch-side dedupe should already have caught). Last-resort
+        // dedupe, not a run failure: the document is in the hub under the other row. Warn, skip,
+        // don't count — so it never reads as an error in the logs.
+        if (error.code === '23505') {
+          console.warn(`    · already in hub (dedupe caught a residual duplicate), skipped: ${it.title}`);
+          continue;
+        }
+        throw error;
+      }
       before === undefined ? counters.new++ : counters.updated++;
       prev.set(it.sourceId, h);
     } catch (e) {
