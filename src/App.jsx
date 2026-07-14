@@ -369,10 +369,11 @@ function Dashboard({ isViewer, onOpenModule }) {
   )
 }
 
-// 🔔 Reminders — owner-only opt-in for push notifications (classes ~45 min before, tests/exams the
-// morning of). Subscribes THIS device and stores it under owner-RLS; the send-push Edge Function on
-// pg_cron does the actual firing. Hidden until the VAPID public key is set AND the browser supports
-// push (on iPhone that means the hub is installed to the Home Screen) — so it never shows a dead toggle.
+// 🔔 Reminders — opt-in for push notifications (classes ~45 min before, tests/exams the morning of).
+// Shown to the owner AND opted-in viewers (Lize gets the same class-wide reminders — her call).
+// Subscribes THIS device and stores it under owner-RLS; the send-push Edge Function on pg_cron does
+// the actual firing. Hidden until the VAPID public key is set AND the browser supports push (on
+// iPhone that means the hub is installed to the Home Screen) — so it never shows a dead toggle.
 function RemindersCard() {
   const [state, setState] = useState('loading')   // loading|unsupported|unconfigured|blocked|on|off
   const [busy, setBusy] = useState(false)
@@ -1027,6 +1028,11 @@ function ExamAccessFab({ userId, isViewer }) {
     setModules(mods.data || [])
   }
   useEffect(() => { load() }, [])
+
+  // Refetch whenever the overlay opens. Critical for the deep-link case: a notification tap on an
+  // already-open (possibly day-old) tab is a same-document #exams navigation — nothing reloads — so
+  // without this the overlay would show yesterday's rows, missing the very exam the push was about.
+  useEffect(() => { if (open) load() }, [open])
 
   // Deep-link: an exam-morning notification opens the hub at #exams — pop the overlay straight open
   // (on cold start and, via hashchange, when the notification focuses an already-open tab), then

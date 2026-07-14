@@ -4,7 +4,8 @@
 // finds what's DUE for the owner and pushes a reminder to her subscribed devices, then stamps
 // `reminded_at` so nothing ever fires twice:
 //   • CLASSES  (goals.kind='class')     — ~45 min before target_time on the class's day. Recurring
-//                                          classes fire weekly on their weekday. No time → 07:00 nudge.
+//                                          classes fire weekly on their weekday, from the first
+//                                          occurrence on. No time → 07:00 nudge.
 //   • EXAMS    (exam_access rows)        — fires on the first run that SEES a today's row (dated today,
 //                                          or still-undated but created today — SALA posts the code the
 //                                          exam morning) while the register window is still open. The
@@ -13,11 +14,18 @@
 //   • TESTS    (goals.is_test=true)      — 07:00 SAST on target_date; SKIPPED when an exam_access row
 //                                          already covers that module+date (the code reminder wins).
 //
-// Send { "test": true } (with the x-cron-secret header) to ping every subscribed device once, now.
-// Runs on Deno; libraries via npm: specifiers. Uses the service role (bypasses RLS).
+// The scheduling decisions live in ./reminders.mjs (pure, unit-tested by sync/verify-reminders.mjs);
+// this file is the I/O shell around them. Send { "test": true } (with the x-cron-secret header) to
+// ping every subscribed device once, now. Runs on Deno; libraries via npm: specifiers. Uses the
+// service role (bypasses RLS).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
+import {
+  saNow, hhmm,
+  remindedToday, examRelevantToday, examDue, classOnToday, classDue,
+  MORNING_MIN,
+} from "./reminders.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -31,47 +39,6 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
 
 const HUB_URL = "/nwu-hub/";
 const EXAM_URL = "/nwu-hub/#exams";
-const MORNING_MIN = 7 * 60;   // 07:00 SAST — the morning-of ping for tests & exams (and time-less classes)
-const CLASS_LEAD = 45;        // minutes before a class to remind
-
-// "Now" in South African time: today's date, and minutes-since-midnight. SAST is UTC+2, no DST.
-function saNow() {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Johannesburg",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-  const p = Object.fromEntries(fmt.formatToParts(new Date()).map((x) => [x.type, x.value]));
-  const hh = p.hour === "24" ? "00" : p.hour;           // Intl can emit "24" at midnight
-  return {
-    date: `${p.year}-${p.month}-${p.day}`,
-    minutes: parseInt(hh, 10) * 60 + parseInt(p.minute, 10),
-  };
-}
-
-// The SAST calendar date of a timestamptz (for the "already reminded today?" check).
-function saDateOf(ts: string | null): string | null {
-  if (!ts) return null;
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date(ts));
-}
-
-// Weekday of a YYYY-MM-DD, timezone-stable (0=Sun … 6=Sat). Used to place recurring classes.
-function dow(dateStr: string): number {
-  return new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-}
-
-// "HH:MM:SS" / "HH:MM" → minutes since midnight, or null.
-function timeMin(t: string | null): number | null {
-  if (typeof t !== "string") return null;
-  const m = t.match(/^(\d{2}):(\d{2})/);
-  return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
-}
-// "HH:MM:SS" → "HH:MM" for display.
-function hhmm(t: string | null): string {
-  return typeof t === "string" ? t.slice(0, 5) : "";
-}
 
 type Sub = { id: string; owner: string; subscription: unknown };
 
@@ -87,6 +54,11 @@ async function sendTo(subs: Sub[], payload: Record<string, unknown>) {
       if (code === 404 || code === 410) {
         await admin.from("push_subscriptions").delete().eq("id", s.id);
         removed++;
+      } else {
+        // Any OTHER failure (a 401 from a VAPID misconfig, a network error) would otherwise be
+        // silent: no send, no reminded_at stamp, so it retries every 15 min forever with nothing in
+        // the logs to explain it. Surface it so the function logs make the cause visible.
+        console.error(`push send failed (status ${code ?? "?"}): ${(err as Error)?.message ?? err}`);
       }
     }
   }
@@ -122,10 +94,10 @@ Deno.serve(async (req) => {
   // --- EXAMS (exam_access) — the code-bearing reminder. -----------------------------------------
   // SALA posts the access code the exam MORNING, so the row usually lands ~08:00 (after the sync) with
   // NO date in the body. So we don't wait for a fixed 07:00 or insist event_date is set: fire on the
-  // first run that sees a row for TODAY (event_date==today, or a still-undated row CREATED today) while
-  // the register window hasn't closed — that gets the code onto her phone before the 08:30–08:59 slot.
-  // (Residual: an evening-before post gets yesterday's date and won't match — can't be fixed from a
-  // dateless body.) Track (owner|module|date) so a matching is_test goal stays quiet.
+  // first run that sees a row for TODAY while the register window hasn't closed — that gets the code
+  // onto her phone before the 08:30–08:59 slot. (Residual: an evening-before post gets yesterday's
+  // date and won't match — can't be fixed from a dateless body.) Track (owner|module|date) so a
+  // matching is_test goal stays quiet.
   const examCovered = new Set<string>();
   {
     const { data: exams } = await admin
@@ -133,22 +105,14 @@ Deno.serve(async (req) => {
       .select("id, owner, module_id, title, access_code, code_open, code_close, start_time, event_date, created_at, reminded_at, modules(code)")
       .or(`event_date.eq.${now.date},event_date.is.null`);
     for (const x of exams ?? []) {
-      // Relevant today? A dated row must be dated today; an undated row must have been CREATED today
-      // (SALA's exam-morning post) — this excludes historical undated rows and manual future exams.
-      const relevant = x.event_date === now.date
-        || (x.event_date === null && saDateOf(x.created_at) === now.date);
-      if (!relevant) continue;
+      if (!examRelevantToday(x, now)) continue;
 
       // This exam owns today's sitting for dedup — record BEFORE the reminded check so a late-synced
       // is_test goal is suppressed even when the exam already fired on an earlier run this morning.
       const effDate = x.event_date ?? now.date;
       examCovered.add(`${x.owner}|${x.module_id}|${effDate}`);
-      if (saDateOf(x.reminded_at) === now.date) continue;            // already reminded today
-
-      // Fire while the register window is still open (now < code_close). No window known → 07:00 nudge.
-      const closeMin = timeMin(x.code_close);
-      const due = closeMin !== null ? now.minutes < closeMin : now.minutes >= MORNING_MIN;
-      if (!due) continue;
+      if (remindedToday(x.reminded_at, now)) continue;            // already reminded today
+      if (!examDue(x, now)) continue;
 
       const code = x.access_code ? ` — code ${x.access_code}` : "";
       const win = x.code_open && x.code_close ? ` · register ${hhmm(x.code_open)}–${hhmm(x.code_close)}` : "";
@@ -172,21 +136,9 @@ Deno.serve(async (req) => {
     .select("id, owner, text, target_date, target_time, recurring, reminded_at, modules(code)")
     .eq("kind", "class");
   for (const g of classGoals ?? []) {
-    if (!g.target_date) continue;
-    // Is today this class's day? Recurring → same weekday; one-off → the exact date.
-    const onToday = g.recurring ? dow(g.target_date) === dow(now.date) : g.target_date === now.date;
-    if (!onToday) continue;
-    if (saDateOf(g.reminded_at) === now.date) continue;             // already reminded today
-
-    const tmin = timeMin(g.target_time);
-    let due = false;
-    if (tmin === null) {
-      due = now.minutes >= MORNING_MIN;                             // no time → morning nudge
-    } else {
-      const until = tmin - now.minutes;
-      due = until > 0 && until <= CLASS_LEAD;                       // first tick within 45 min before
-    }
-    if (!due) continue;
+    if (!classOnToday(g, now)) continue;
+    if (remindedToday(g.reminded_at, now)) continue;             // already reminded today
+    if (!classDue(g, now)) continue;
 
     const when = g.target_time ? ` at ${hhmm(g.target_time)}` : "";
     const res = await sendAll({
@@ -207,7 +159,7 @@ Deno.serve(async (req) => {
       .select("id, owner, module_id, text, target_date, reminded_at")
       .eq("is_test", true).eq("target_date", now.date);
     for (const g of tests ?? []) {
-      if (saDateOf(g.reminded_at) === now.date) continue;
+      if (remindedToday(g.reminded_at, now)) continue;
       if (examCovered.has(`${g.owner}|${g.module_id}|${g.target_date}`)) {
         // The code-bearing exam reminder already went out for this sitting — stamp to stay quiet.
         await admin.from("goals").update({ reminded_at: new Date().toISOString() }).eq("id", g.id);
