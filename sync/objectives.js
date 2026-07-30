@@ -33,15 +33,20 @@ Set each goal's "kind":
 Classes are shown in their own section and change often (new time / new link most weeks), so getting
 this right matters.
 
-Each goal: short, specific, max ~14 words. Tasks phrased as instructions ("Submit Assignment 1",
-"Register for Test 2").
+Every goal — task or class — must start with the module code, since the dashboard's Objectives list
+is a single cross-module list with no other way to tell which module a goal belongs to. Format:
+"<CODE>: <goal text>", e.g. "EDCC125: Submit Assignment 1", "MATH121: Register for Test 2". The
+module code is given in the message.
 
-Classes/sessions must be UNAMBIGUOUS — the student should never have to open the announcement to
-know what/when. Always start with the module code and include the time.
-  • One-off class (a specific date): include the weekday + date, e.g. "MATV121 online class — Wed 15
-    Jul, 19:00". Set recurring to false.
+Each goal: short, specific, max ~14 words (the module code prefix doesn't count against that).
+Tasks phrased as instructions ("EDCC125: Submit Assignment 1", "MATH121: Register for Test 2").
+
+Classes/sessions must additionally be UNAMBIGUOUS — the student should never have to open the
+announcement to know what/when — so also include the time, after the module code.
+  • One-off class (a specific date): include the weekday + date, e.g. "MATV121: online class — Wed
+    15 Jul, 19:00". Set recurring to false.
   • Recurring class (the announcement says it runs EVERY week / weekly / uses a standing link): name
-    the weekday, not a single date, e.g. "MATV121 online class — Wednesdays, 19:00". Set recurring to
+    the weekday, not a single date, e.g. "MATV121: online class — Wednesdays, 19:00". Set recurring to
     true, and STILL set target_date to the next occurrence's date (the dashboard reads the weekday off
     it to place the class each week).
 The module code is given in the message. If the announcement gives a join/meeting URL (Teams, Zoom,

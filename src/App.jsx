@@ -509,6 +509,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [resources, setResources] = useState([])
   const [papers, setPapers] = useState([])
   const [parts, setParts] = useState([])
+  const [studyLog, setStudyLog] = useState([])
   const [profiles, setProfiles] = useState({})
   const [openSummary, setOpenSummary] = useState(null)
   const [showKit, setShowKit] = useState(false)
@@ -524,7 +525,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       // NOTE: eFundi-synced raw content (announcements, files) is deliberately NOT shown here —
       // the hub surfaces only tutor-authored work. Announcements feed the objectives agent; synced
       // files are tutor fuel. See docs/efundi-sync-plan.md. Only owner-curated files render (below).
-      const [u, s, a, res, pp, profs] = await Promise.all([
+      const [u, s, a, res, pp, profs, sl] = await Promise.all([
         supabase.from('study_units').select('*').eq('module_id', m.id).order('number'),
         supabase.from('summaries').select('id,title,kind,unit_id,assessment_id,html').eq('module_id', m.id).order('created_at'),
         supabase.from('assessments').select('*').eq('module_id', m.id).order('due_date'),
@@ -532,12 +533,16 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         supabase.from('past_papers').select('*').eq('module_id', m.id)
           .order('year', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }),
         supabase.from('profiles').select('id, display_name, role'),
+        // Owner-only RLS (0001) — a viewer's query just comes back empty, so the badge silently
+        // doesn't show for them rather than erroring. This is Megan's own motivator, not shared data.
+        supabase.from('study_log').select('unit_id, minutes').eq('module_id', m.id),
       ])
       setUnits(u.data || [])
       setSummaries(s.data || [])
       setAssessments(a.data || [])
       setResources(res.data || [])
       setPapers(pp.data || [])
+      setStudyLog(sl.data || [])
       const pmap = {}
       ;(profs.data || []).forEach((p) => { pmap[p.id] = p })
       setProfiles(pmap)
@@ -559,6 +564,10 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // Unit summaries live under Study Units; assessment-linked briefs live under Assessments.
   // A brief sets assessment_id (unit_id null), so guarding on both keeps them from doubling up.
   const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId && !s.assessment_id)
+  const minutesFor = (unitId) => studyLog
+    .filter((l) => l.unit_id === unitId)
+    .reduce((sum, l) => sum + (l.minutes || 0), 0)
+  const formatMinutes = (mins) => mins < 60 ? `${mins}m` : `${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h`
   // A "(START HERE)" brief covers the whole assessment set, so float it to the top of the
   // section instead of nesting it under whichever single assessment it happens to be linked to.
   const isOverviewBrief = (s) => /\(start here\)/i.test(s.title || '')
@@ -604,6 +613,9 @@ function ModulePage({ code, isViewer, userId, onBack }) {
                   </div>
                   <span className="chip">{u.status.replace('_', ' ')}</span>
                 </div>
+                {minutesFor(u.id) > 0 && (
+                  <div className="muted text-sm mt-1">⏱ {formatMinutes(minutesFor(u.id))} logged so far</div>
+                )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {summariesFor(u.id).length ? summariesFor(u.id).map((s) => (
                     <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
