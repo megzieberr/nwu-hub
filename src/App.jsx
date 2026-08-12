@@ -3,6 +3,7 @@ import { supabase } from './lib/supabase'
 import { signInOrUp, signOut } from './lib/auth'
 import { qrSvg } from './lib/qr'
 import { pushState, enablePush, disablePush } from './lib/push'
+import { questWindow } from './lib/quests'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -221,15 +222,7 @@ function Dashboard({ isViewer, onOpenModule }) {
     })()
   }, [isViewer])
 
-  // Dashboard-only cutoff so the quest log reads as "what's actually coming up", not the
-  // whole semester's dread. The full list (incl. date-TBC ones) still lives on each module's
-  // Assessments page — this just trims the emotional load of the home screen.
-  const QUEST_WINDOW_MS = 21 * 24 * 60 * 60 * 1000
-  const questLog = deadlines.filter((d) => {
-    if (!d.due_date) return false
-    const due = new Date(d.due_date).getTime()
-    return !isNaN(due) && due - Date.now() <= QUEST_WINDOW_MS
-  })
+  const questLog = questWindow(deadlines)
 
   // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
   // — the home screen shows what's on now, not the whole semester. A one-off class shows only in the
@@ -316,9 +309,18 @@ function Dashboard({ isViewer, onOpenModule }) {
             {questLog.map((d) => {
               const c = d.modules?.colour || 'var(--cyan)'
               return (
-                <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14 }}>
-                  <span><span className="mono" style={{ marginRight: 8, color: c }}>{d.modules?.code}</span>{d.title}</span>
-                  <span className="muted text-sm">{d.due_date || '—'}</span>
+                <div className="row" key={d.id} style={{ borderLeft: `3px solid ${d.overdue ? 'var(--red)' : c}`, paddingLeft: 14, gap: 10 }}>
+                  {/* minWidth:0 lets a long title wrap instead of forcing the row wider than the
+                      panel — without it a flex item refuses to shrink below its longest word, and
+                      on a phone that shoved the date clean off the right edge. */}
+                  <span style={{ minWidth: 0 }}>
+                    <span className="mono" style={{ marginRight: 8, color: c }}>{d.modules?.code}</span>{d.title}
+                  </span>
+                  {/* The date never wraps mid-value ("2026-07-" / "24" was the old look). */}
+                  <span className="text-sm" style={{ flex: '0 0 auto', whiteSpace: 'nowrap', textAlign: 'right', color: d.overdue ? 'var(--red)' : undefined }}>
+                    {d.overdue && <span className="mono" style={{ marginRight: 6 }}>OVERDUE</span>}
+                    <span className={d.overdue ? undefined : 'muted'}>{d.due_date || '—'}</span>
+                  </span>
                 </div>
               )
             })}

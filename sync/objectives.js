@@ -12,6 +12,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { parseExamAccess, resolveEventDate } from './exam-parse.js';
+import { classLink } from './class-link.mjs';
 
 const MODEL = 'claude-haiku-4-5';   // user-chosen for cost; supports structured outputs
 
@@ -121,10 +122,9 @@ function validTime(t) {
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
 }
 
-// Only accept real http(s) URLs; anything else (a stray sentence, a mailto, null) -> no link.
-function validUrl(u) {
-  return typeof u === 'string' && /^https?:\/\/\S+$/i.test(u.trim()) ? u.trim() : null;
-}
+// Join-link handling lives in ./class-link.mjs so its regression net can import it without the
+// Anthropic SDK (installed in CI only). See that file for why a link must be grounded in the
+// announcement text rather than merely well-formed.
 
 // Returns the number of goals created. Never throws — failures are logged and the run continues.
 export async function generateObjectives(sb) {
@@ -224,8 +224,10 @@ export async function generateObjectives(sb) {
           // Time is sticky like the link — a new stated time updates it, a time-less update never wipes it.
           if (validTime(g.target_time)) patch.target_time = validTime(g.target_time);
           // Link is sticky: a newer real link replaces the old one, but a link-less update (e.g. a
-          // time change) never wipes a link the lecturer already posted.
-          if (validUrl(g.link)) patch.link = validUrl(g.link);
+          // time change) never wipes a link the lecturer already posted. Must be grounded in this
+          // announcement's text — an invented join link would silently overwrite a working one.
+          const patchLink = classLink(g.link, a.body_html);
+          if (patchLink) patch.link = patchLink;
           if (typeof g.recurring === 'boolean') patch.recurring = g.recurring;
           const { error: ue } = await sb.from('goals').update(patch).eq('id', updId);
           if (ue) { console.warn(`  objectives: goal update failed: ${ue.message}`); continue; }
@@ -238,7 +240,9 @@ export async function generateObjectives(sb) {
           owner: a.owner, module_id: a.module_id,
           text: String(g.text).slice(0, 300), target_date: validDate(g.target_date),
           target_time: validTime(g.target_time),
-          link: validUrl(g.link), kind: g.kind === 'class' ? 'class' : 'task',
+          // A class keeps the announcement-grounded join link; an ordinary task never gets one.
+          link: g.kind === 'class' ? classLink(g.link, a.body_html) : null,
+          kind: g.kind === 'class' ? 'class' : 'task',
           recurring: g.kind === 'class' && g.recurring === true,
           // Only a task can be a test sitting; a class is never a "test" for reminder purposes.
           is_test: g.kind !== 'class' && g.is_test === true,

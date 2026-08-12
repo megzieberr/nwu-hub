@@ -190,6 +190,37 @@ export async function syncAnnouncements(sb, owner, moduleId, items, prev, counte
   }
 }
 
+// findAdoptableAssessment — a hand-seeded assessment in this module that IS the eFundi item we
+// are about to insert. Assessments are seeded by hand from the study guide long before the
+// lecturer opens the matching eFundi assignment, so a source_id-only dedupe (the old behaviour)
+// twinned them: ENGV121 ended up with both "Assignment 1 · Sociolinguistics (pair)" (curated:
+// weight, brief attached) and a bare "Assignment 1" from the sync. Same shape as the s10b
+// resource fix — look at the DB, not just this fetch.
+//
+// Matched on nameKey PREFIX, because the curated title is the eFundi one plus a descriptive
+// suffix ("Assignment 1" -> "Assignment 1 · Sociolinguistics (pair)"). Prefix, not substring, so
+// "Assignment 1" can never adopt "Assignment 10". Only rows with source IS NULL are eligible, so
+// this can never steal a row already owned by another eFundi item.
+// Pure decision, exported so sync/verify-assessment-adopt.mjs tests the code that actually runs.
+// True when `localTitle` is the same assessment as eFundi's `efundiTitle`: either identical, or
+// eFundi's title plus a descriptive suffix. The separator check is what stops "Assignment 1"
+// from swallowing "Assignment 10".
+export function isSameAssessment(localTitle, efundiTitle) {
+  const key = nameKey(efundiTitle);
+  const k = nameKey(localTitle);
+  if (!key || !k) return false;
+  if (k === key) return true;
+  if (!k.startsWith(key)) return false;
+  return /^[\s·:\-–—(,.]/.test(k.slice(key.length));
+}
+
+async function findAdoptableAssessment(sb, moduleId, title) {
+  const { data, error } = await sb.from('assessments')
+    .select('id, title').eq('module_id', moduleId).is('source', null);
+  if (error) { console.warn(`findAdoptableAssessment: ${error.message}`); return null; }
+  return (data ?? []).find((r) => isSameAssessment(r.title, title)) ?? null;
+}
+
 export async function syncAssignments(sb, owner, moduleId, items, prev, counters, now) {
   for (const it of items) {
     if (!it.sourceId) continue;
@@ -197,18 +228,41 @@ export async function syncAssignments(sb, owner, moduleId, items, prev, counters
     const before = prev.get(it.sourceId);
     if (before === h) continue;
     if (before === undefined) {
-      const { error } = await sb.from('assessments').insert({
-        owner, module_id: moduleId, title: it.title, type: 'assignment',
-        due_date: it.dueDate, status: 'upcoming',
-        source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
-      });
-      if (error) throw error;
-      counters.new++;
+      const adopt = await findAdoptableAssessment(sb, moduleId, it.title);
+      if (adopt) {
+        // Take ownership of the curated row instead of inserting a twin. Its title is left
+        // alone — the hand-written one is more informative than eFundi's, and weight/status/
+        // mark and any attached brief stay put. From now on it updates in place below.
+        const { error } = await sb.from('assessments').update({
+          due_date: it.dueDate,
+          source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
+        }).eq('id', adopt.id);
+        if (error) throw error;
+        console.log(`  = adopted existing assessment "${adopt.title}" for eFundi "${it.title}"`);
+        counters.updated++;
+      } else {
+        const { error } = await sb.from('assessments').insert({
+          owner, module_id: moduleId, title: it.title, type: 'assignment',
+          due_date: it.dueDate, status: 'upcoming',
+          source: 'efundi', source_id: it.sourceId, source_hash: h, source_synced_at: now,
+        });
+        if (error) throw error;
+        counters.new++;
+      }
     } else {
       // Update only worker-owned fields — never clobber a status/mark Megan set by hand.
-      const { error } = await sb.from('assessments').update({
-        title: it.title, due_date: it.dueDate, source_hash: h, source_synced_at: now,
-      }).eq('source', 'efundi').eq('source_id', it.sourceId);
+      // due_date is always worker-owned: eFundi is the authority on dates once a row is linked,
+      // which is the whole point of the link. The title is only overwritten when it still looks
+      // like eFundi's own — a title that EXTENDS the eFundi one is hand-curated (an adopted row,
+      // or one she renamed), and a lecturer's rename must not eat that description.
+      const { data: cur } = await sb.from('assessments')
+        .select('title').eq('source', 'efundi').eq('source_id', it.sourceId).maybeSingle();
+      const curated = !!cur && nameKey(cur.title) !== nameKey(it.title)
+        && isSameAssessment(cur.title, it.title);
+      const patch = { due_date: it.dueDate, source_hash: h, source_synced_at: now };
+      if (!curated) patch.title = it.title;
+      const { error } = await sb.from('assessments').update(patch)
+        .eq('source', 'efundi').eq('source_id', it.sourceId);
       if (error) throw error;
       counters.updated++;
     }
