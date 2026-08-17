@@ -4,6 +4,7 @@ import { signInOrUp, signOut } from './lib/auth'
 import { qrSvg } from './lib/qr'
 import { pushState, enablePush, disablePush } from './lib/push'
 import { questWindow } from './lib/quests'
+import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -223,6 +224,9 @@ function Dashboard({ isViewer, onOpenModule }) {
   }, [isViewer])
 
   const questLog = questWindow(deadlines)
+  // My Week: at most one line per module (its next deadline) — the calm glance above the fold.
+  // Reuses the Quest Log's fetch, so hidden modules are already filtered out.
+  const myWeekRows = myWeek(deadlines)
 
   // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
   // — the home screen shows what's on now, not the whole semester. A one-off class shows only in the
@@ -291,6 +295,26 @@ function Dashboard({ isViewer, onOpenModule }) {
             )}
           </div>
         </div>
+
+        {myWeekRows.length > 0 && (
+          <Section title="My Week · next deadline per module">
+            <div className="panel">
+              {myWeekRows.map((d) => {
+                const c = d.modules?.colour || 'var(--cyan)'
+                return (
+                  <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10 }}>
+                    <span className="chip" style={{ color: c, borderColor: c, flex: '0 0 auto' }}>{d.modules?.code}</span>
+                    {/* minWidth:0 → long titles wrap instead of widening the row (same fix as the Quest Log) */}
+                    <span style={{ color: '#eaf4ff', minWidth: 0 }}>{d.title}</span>
+                    <span className="text-sm" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', flex: '0 0 auto', color: d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
+                      {d.thisWeek ? '⏰ ' : ''}{formatDue(d.due_date)} · {dueLabel(d.days)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </Section>
+        )}
 
         <Section title="Modules" empty={!modules.length && 'No modules yet — a tutor will seed these when it orients itself.'}>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -601,6 +625,36 @@ function ModulePage({ code, isViewer, userId, onBack }) {
             )}
           </div>
         </div>
+
+        {(() => {
+          // This Week card — the one question the page should answer first: "what do I do now?"
+          // Hidden entirely when the module has no dated upcoming assessments at all.
+          const wk = weekAhead(assessments)
+          if (!wk.thisWeek.length && !wk.next) return null
+          return (
+            <div className="panel bracket p-4" style={{ '--accent': accent }}>
+              <div className="section-label" style={{ color: accent }}>This week</div>
+              {wk.thisWeek.length ? wk.thisWeek.map((a) => (
+                <div key={a.id} className="flex items-center justify-between gap-3 mt-2">
+                  <span style={{ color: '#eaf4ff', minWidth: 0 }}>⏰ {a.title}</span>
+                  <span className="text-sm" style={{ color: accent, whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                    {formatDue(a.due_date)} · {dueLabel(a.days)}
+                  </span>
+                </div>
+              )) : (
+                <div className="mt-2">
+                  <div className="muted">✅ Nothing due this week.</div>
+                  <div className="flex items-center justify-between gap-3 mt-2">
+                    <span className="muted" style={{ minWidth: 0 }}>Next up: <span style={{ color: '#eaf4ff' }}>{wk.next.title}</span></span>
+                    <span className="muted text-sm" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                      {formatDue(wk.next.due_date)} · {dueLabel(wk.next.days)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
         <Section title="Study Units">
           {(() => {
