@@ -303,11 +303,14 @@ function Dashboard({ isViewer, onOpenModule }) {
             <div className="panel">
               {myWeekRows.map((d) => {
                 const c = d.overdue ? 'var(--red)' : (d.modules?.colour || 'var(--cyan)')
+                // flexWrap: the date is nowrap by the s18 rule, so on a narrow phone it must drop
+                // to its own line — NOT squeeze the title into a one-word-per-line ribbon (Megan's
+                // 2026-08-17 phone screenshot). minWidth:120 forces the drop early enough that the
+                // title keeps a readable column.
                 return (
-                  <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10 }}>
+                  <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10, flexWrap: 'wrap', rowGap: 4 }}>
                     <span className="chip" style={{ color: c, borderColor: c, flex: '0 0 auto' }}>{d.modules?.code}</span>
-                    {/* minWidth:0 → long titles wrap instead of widening the row (the s18 layout fix) */}
-                    <span style={{ color: '#eaf4ff', minWidth: 0 }}>{d.title}</span>
+                    <span style={{ color: '#eaf4ff', minWidth: 120, flex: '1 1 0' }}>{d.title}</span>
                     <span className="text-sm" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', flex: '0 0 auto', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
                       {d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
                     </span>
@@ -616,19 +619,21 @@ function ModulePage({ code, isViewer, userId, onBack }) {
           return (
             <div className="panel bracket p-4" style={{ '--accent': accent }}>
               <div className="section-label" style={{ color: accent }}>This week</div>
+              {/* flex-wrap on these rows too: nowrap dates drop below the title on narrow phones
+                  instead of squeezing it (same fix as the My Week rows). */}
               {wk.thisWeek.length ? wk.thisWeek.map((a) => (
-                <div key={a.id} className="flex items-center justify-between gap-3 mt-2">
-                  <span style={{ color: '#eaf4ff', minWidth: 0 }}>⏰ {a.title}</span>
-                  <span className="text-sm" style={{ color: accent, whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                <div key={a.id} className="flex flex-wrap items-center justify-between gap-3 mt-2">
+                  <span style={{ color: '#eaf4ff', minWidth: 120, flex: '1 1 0' }}>⏰ {a.title}</span>
+                  <span className="text-sm" style={{ color: accent, whiteSpace: 'nowrap', flex: '0 0 auto', marginLeft: 'auto' }}>
                     {formatDue(a.due_date)} · {dueLabel(a.days)}
                   </span>
                 </div>
               )) : (
                 <div className="mt-2">
                   <div className="muted">✅ Nothing due this week.</div>
-                  <div className="flex items-center justify-between gap-3 mt-2">
-                    <span className="muted" style={{ minWidth: 0 }}>Next up: <span style={{ color: '#eaf4ff' }}>{wk.next.title}</span></span>
-                    <span className="muted text-sm" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mt-2">
+                    <span className="muted" style={{ minWidth: 120, flex: '1 1 0' }}>Next up: <span style={{ color: '#eaf4ff' }}>{wk.next.title}</span></span>
+                    <span className="muted text-sm" style={{ whiteSpace: 'nowrap', flex: '0 0 auto', marginLeft: 'auto' }}>
                       {formatDue(wk.next.due_date)} · {dueLabel(wk.next.days)}
                     </span>
                   </div>
