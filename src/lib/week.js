@@ -2,7 +2,7 @@
 // module page's week card (Megan's ask, s19: "I just want to know what I should be doing each
 // week"). Same arrangement as quests.js: Node cannot import .jsx, so anything that needs a
 // regression net (sync/verify-week.mjs) lives here, with `today` injectable so tests never rot.
-import { daysUntil } from './quests.js' // extension required: Node (the test runner) resolves ESM strictly
+import { daysUntil, QUEST_OVERDUE_GRACE_DAYS } from './quests.js' // extension required: Node (the test runner) resolves ESM strictly
 
 export const WEEK_AHEAD_DAYS = 7
 
@@ -21,24 +21,36 @@ export function weekAhead(assessments, today = new Date().toISOString().slice(0,
   }
 }
 
-// Dashboard: at most ONE line per module — its next dated deadline — soonest first. A module with
-// nothing coming stays off the list entirely. That's the whole difference from the Quest Log: the
-// log is a window over every deadline; this is a glance, capped at one line per module, so it can
-// never grow past the number of modules. Rows carry the dashboard fetch's modules{} join through.
+// Dashboard: at most ONE upcoming line per module — its next dated deadline — soonest first.
+// A module with nothing coming stays off the list entirely. That's the whole difference from the
+// retired Quest Log: the log was a window over every deadline; this is a glance, capped per module,
+// so it can never grow past the number of modules. Rows carry the dashboard fetch's modules{} join.
+//
+// Since s19 retired the Quest Log, My Week also inherits its OTHER end (the s18 decision: a window
+// needs both ends when nothing ever closes an item): a module's most recently MISSED deadline stays
+// visible as a red `overdue` row for QUEST_OVERDUE_GRACE_DAYS, then ages out on its own. Without
+// this, a deadline she missed would vanish at midnight — the exact failure s18 was built to stop.
 export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10)) {
-  const byModule = new Map()
+  const upcoming = new Map()
+  const missed = new Map()
   for (const d of deadlines || []) {
     if (!d || !d.due_date) continue
     const days = daysUntil(d.due_date, today)
-    if (days === null || days < 0) continue
+    if (days === null) continue
     const key = d.modules?.code || d.module_id
-    const prev = byModule.get(key)
-    if (!prev || days < prev.days) byModule.set(key, { ...d, days })
+    if (days >= 0) {
+      const prev = upcoming.get(key)
+      if (!prev || days < prev.days) upcoming.set(key, { ...d, days })
+    } else if (days >= -QUEST_OVERDUE_GRACE_DAYS) {
+      const prev = missed.get(key)
+      if (!prev || days > prev.days) missed.set(key, { ...d, days }) // most recently missed
+    }
   }
-  return [...byModule.values()]
-    .map((d) => ({ ...d, thisWeek: d.days <= WEEK_AHEAD_DAYS }))
-    .sort((a, b) => a.days - b.days ||
-      String(a.modules?.code || '').localeCompare(String(b.modules?.code || '')))
+  return [
+    ...[...missed.values()].map((d) => ({ ...d, overdue: true, thisWeek: false })),
+    ...[...upcoming.values()].map((d) => ({ ...d, overdue: false, thisWeek: d.days <= WEEK_AHEAD_DAYS })),
+  ].sort((a, b) => a.days - b.days ||
+    String(a.modules?.code || '').localeCompare(String(b.modules?.code || '')))
 }
 
 // 'today' / 'tomorrow' / 'in N days' — the calm relative label next to a date.

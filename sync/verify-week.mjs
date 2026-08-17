@@ -62,6 +62,26 @@ const tie = myWeek([
 ], TODAY)
 check('myWeek: same-day tie breaks by module code', tie.map((d) => d.modules.code), ['ALDE122', 'SECL121'])
 
+// ---- the inherited overdue grace (Quest Log retirement, s19) ----
+// A deadline missed 2 days ago must STAY visible (red) while one missed 5 days ago has aged out —
+// the s18 both-ends rule, now living in My Week. The overdue row sorts above the upcoming ones.
+const grace = myWeek([
+  { id: 'm2', title: 'Missed recently', due_date: '2026-08-15', modules: { code: 'ALDE122' } }, // -2
+  { id: 'm5', title: 'Missed long ago', due_date: '2026-08-12', modules: { code: 'ENGV121' } }, // -5 → gone
+  { id: 'up', title: 'Coming up', due_date: '2026-08-23', modules: { code: 'ALDE122' } },
+], TODAY)
+check('grace: 2-days-missed shows, 5-days-missed aged out', grace.map((d) => d.id), ['m2', 'up'])
+check('grace: missed row tagged overdue, upcoming not', grace.map((d) => d.overdue), [true, false])
+check('grace: a module can carry BOTH an overdue and an upcoming line', grace.filter((d) => d.modules.code === 'ALDE122').length, 2)
+// exactly at the grace boundary (-4) still shows; the module keeps only its MOST RECENT miss
+const edge = myWeek([
+  { id: 'e4', title: 'Edge', due_date: '2026-08-13', modules: { code: 'SECL121' } },            // -4 → last day shown
+  { id: 'older', title: 'Older miss', due_date: '2026-08-14', modules: { code: 'MATH121' } },    // -3
+  { id: 'oldest', title: 'Oldest miss', due_date: '2026-08-13', modules: { code: 'MATH121' } },  // -4 → folded away
+], TODAY)
+check('grace: day -4 boundary still shows; one overdue line per module (most recent miss)',
+  edge.map((d) => d.id), ['e4', 'older'])
+
 // ---- labels ----
 check('dueLabel: today', dueLabel(0), 'today')
 check('dueLabel: tomorrow', dueLabel(1), 'tomorrow')

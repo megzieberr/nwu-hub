@@ -3,7 +3,9 @@ import { supabase } from './lib/supabase'
 import { signInOrUp, signOut } from './lib/auth'
 import { qrSvg } from './lib/qr'
 import { pushState, enablePush, disablePush } from './lib/push'
-import { questWindow } from './lib/quests'
+// Quest Log retired s19 (Megan: "My Week is better") — its both-ends window semantics live on
+// inside lib/week.js's myWeek (overdue grace included). questWindow stays in lib/quests.js, tested
+// but unrendered, in case she ever wants the full window back.
 import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 
 export default function App() {
@@ -223,9 +225,9 @@ function Dashboard({ isViewer, onOpenModule }) {
     })()
   }, [isViewer])
 
-  const questLog = questWindow(deadlines)
-  // My Week: at most one line per module (its next deadline) — the calm glance above the fold.
-  // Reuses the Quest Log's fetch, so hidden modules are already filtered out.
+  // My Week: at most one upcoming line per module (its next deadline) plus a red line for a
+  // just-missed one (4-day grace, inherited from the retired Quest Log). Hidden modules are
+  // already filtered out of `deadlines`.
   const myWeekRows = myWeek(deadlines)
 
   // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
@@ -296,25 +298,25 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </div>
 
-        {myWeekRows.length > 0 && (
-          <Section title="My Week · next deadline per module">
+        <Section title="My Week · next deadline per module" empty={!myWeekRows.length && 'Nothing coming up — all clear. 🎉'}>
+          {myWeekRows.length > 0 && (
             <div className="panel">
               {myWeekRows.map((d) => {
-                const c = d.modules?.colour || 'var(--cyan)'
+                const c = d.overdue ? 'var(--red)' : (d.modules?.colour || 'var(--cyan)')
                 return (
                   <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10 }}>
                     <span className="chip" style={{ color: c, borderColor: c, flex: '0 0 auto' }}>{d.modules?.code}</span>
-                    {/* minWidth:0 → long titles wrap instead of widening the row (same fix as the Quest Log) */}
+                    {/* minWidth:0 → long titles wrap instead of widening the row (the s18 layout fix) */}
                     <span style={{ color: '#eaf4ff', minWidth: 0 }}>{d.title}</span>
-                    <span className="text-sm" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', flex: '0 0 auto', color: d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
-                      {d.thisWeek ? '⏰ ' : ''}{formatDue(d.due_date)} · {dueLabel(d.days)}
+                    <span className="text-sm" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', flex: '0 0 auto', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
+                      {d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
                     </span>
                   </div>
                 )
               })}
             </div>
-          </Section>
-        )}
+          )}
+        </Section>
 
         <Section title="Modules" empty={!modules.length && 'No modules yet — a tutor will seed these when it orients itself.'}>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -328,28 +330,8 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </Section>
 
-        <Section title="Quest Log · Upcoming" empty={!questLog.length && 'Nothing due in the next 3 weeks.'}>
-          <div className="panel">
-            {questLog.map((d) => {
-              const c = d.modules?.colour || 'var(--cyan)'
-              return (
-                <div className="row" key={d.id} style={{ borderLeft: `3px solid ${d.overdue ? 'var(--red)' : c}`, paddingLeft: 14, gap: 10 }}>
-                  {/* minWidth:0 lets a long title wrap instead of forcing the row wider than the
-                      panel — without it a flex item refuses to shrink below its longest word, and
-                      on a phone that shoved the date clean off the right edge. */}
-                  <span style={{ minWidth: 0 }}>
-                    <span className="mono" style={{ marginRight: 8, color: c }}>{d.modules?.code}</span>{d.title}
-                  </span>
-                  {/* The date never wraps mid-value ("2026-07-" / "24" was the old look). */}
-                  <span className="text-sm" style={{ flex: '0 0 auto', whiteSpace: 'nowrap', textAlign: 'right', color: d.overdue ? 'var(--red)' : undefined }}>
-                    {d.overdue && <span className="mono" style={{ marginRight: 6 }}>OVERDUE</span>}
-                    <span className={d.overdue ? undefined : 'muted'}>{d.due_date || '—'}</span>
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </Section>
+        {/* Quest Log retired s19 — My Week (above) is the calm replacement and inherited its
+            overdue grace. Full deadline lists still live on each module's Assessments section. */}
 
         {!isViewer && (
           <Section title={`Classes · ${showNextWeek ? 'Next' : 'This'} Week`}
