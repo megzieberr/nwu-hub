@@ -7,6 +7,8 @@ import { pushState, enablePush, disablePush } from './lib/push'
 // inside lib/week.js's myWeek (overdue grace included). questWindow stays in lib/quests.js, tested
 // but unrendered, in case she ever wants the full window back.
 import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
+import { googleAddEventUrl } from './lib/classcal'
+import CalendarCard from './CalendarCard'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -345,6 +347,12 @@ function Dashboard({ isViewer, onOpenModule }) {
           </Section>
         )}
 
+        {/* 📆 Classes-in-my-calendar — owner-only opt-in (PLAN-calendar-feed.md §3). The card
+            itself also self-hides for anyone the my_ics_token() RPC returns null for, but the
+            isViewer guard here keeps it out of a viewer's render pass entirely, same pattern as
+            the Classes and Objectives sections around it. */}
+        {!isViewer && <CalendarCard />}
+
         {!isViewer && (() => {
           const objectives = goals.filter((g) => g.kind !== 'class')
           const active = objectives.filter((g) => !g.done)
@@ -475,6 +483,23 @@ function ClassRow({ g }) {
         >Join →</a>
       )}
       {g.showDate && <span className="muted text-sm">{g.showDate}</span>}
+      {/* Per-class add-to-calendar — covers the same-day gap the subscribed feed can miss
+          (Google re-reads that feed on its own schedule, PLAN-calendar-feed.md §3). Only shown
+          once the row has a date to build an event from. */}
+      {g.target_date && (
+        <a
+          href={googleAddEventUrl(g)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Add this class to Google Calendar"
+          style={{
+            flex: '0 0 auto', width: 36, height: 36, borderRadius: 9,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid var(--line-strong)', color: 'var(--muted)', fontSize: 16,
+            textDecoration: 'none',
+          }}
+        >📅</a>
+      )}
     </div>
   )
 }
