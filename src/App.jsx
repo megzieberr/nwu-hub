@@ -8,7 +8,7 @@ import { pushState, enablePush, disablePush } from './lib/push'
 // but unrendered, in case she ever wants the full window back.
 import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 import { googleAddEventUrl } from './lib/classcal'
-import CalendarCard from './CalendarCard'
+import CalendarFeedButton from './CalendarCard'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -193,6 +193,7 @@ function Dashboard({ isViewer, onOpenModule }) {
   const [deadlines, setDeadlines] = useState([])
   const [goals, setGoals] = useState([])
   const [showDone, setShowDone] = useState(false)
+  const [justDone, setJustDone] = useState(null)   // last deadline ticked off — holds the undo line
   const [lastSync, setLastSync] = useState(null)
   const [error, setError] = useState('')
 
@@ -255,6 +256,40 @@ function Dashboard({ isViewer, onOpenModule }) {
     .filter((g) => g.recurring || (g.showDate && g.showDate >= weekStartStr && g.showDate <= weekEndStr))
     .sort((a, b) => (a.showDate || '9999-99-99').localeCompare(b.showDate || '9999-99-99'))
 
+  // ---- ticking a deadline off (s22) ----------------------------------------------------------
+  // Megan, 2026-08-24: "why is it screaming at me? you never added a way to tick it off?" — right.
+  // `assessments.status` has held ('upcoming','submitted','graded','missed') since 0001 and NOTHING
+  // in the app has ever written it, so every deadline stayed `upcoming` for ever and the red OVERDUE
+  // row could only age out on the 4-day grace. No migration needed: the column exists, authenticated
+  // already holds UPDATE on all 15 columns, and `hub_write` gates it to the owner (a viewer's tick
+  // would be refused by RLS anyway — the button is hidden for them regardless).
+  //
+  // The dashboard only ever fetches status='upcoming' (and myWeek now drops non-upcoming rows too),
+  // so a ticked item leaves the card at once. `justDone` keeps ONE undo line on screen afterwards:
+  // without it, a mis-tap could only be fixed by walking into the module page, and the row that
+  // vanished would be a missed deadline she still needs. The sync can't resurrect it either —
+  // sync/write.js updates only worker-owned fields and never touches status.
+  async function markDone(d) {
+    setDeadlines((ds) => ds.filter((x) => x.id !== d.id))
+    setJustDone(d)
+    const { error: e } = await supabase.from('assessments').update({ status: 'submitted' }).eq('id', d.id)
+    if (e) {
+      setDeadlines((ds) => [...ds, d])
+      setJustDone(null)
+      setError('Could not tick that off — ' + e.message)
+    }
+  }
+
+  // Undo puts it back to 'upcoming'. The row is only restored to the list AFTER the write lands —
+  // the opposite order to markDone above, on purpose: a failed undo must leave the line saying
+  // "ticked off" (which is still true of the database) rather than showing a deadline that isn't.
+  async function undoDone(d) {
+    const { error: e } = await supabase.from('assessments').update({ status: 'upcoming' }).eq('id', d.id)
+    if (e) { setError('Could not undo that — ' + e.message); return }
+    setJustDone(null)
+    setDeadlines((ds) => [...ds, d])
+  }
+
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
     const done = !goal.done
@@ -268,7 +303,10 @@ function Dashboard({ isViewer, onOpenModule }) {
 
   return (
     <div className="min-h-screen">
-      <Header />
+      {/* 📅 = the classes-in-my-calendar options (s22). Owner-only: the button also self-hides
+          for anyone my_ics_token() returns null for, but the guard keeps it out of a viewer's
+          render pass entirely, same pattern as the Classes and Objectives sections below. */}
+      <Header>{!isViewer && <CalendarFeedButton />}</Header>
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
         <SyncAlert lastSync={lastSync} />
         {error && (
@@ -300,7 +338,8 @@ function Dashboard({ isViewer, onOpenModule }) {
           </div>
         </div>
 
-        <Section title="My Week · next deadline per module" empty={!myWeekRows.length && 'Nothing coming up — all clear. 🎉'}>
+        <Section title="My Week · next deadline per module"
+          empty={!myWeekRows.length && !justDone && 'Nothing coming up — all clear. 🎉'}>
           {myWeekRows.length > 0 && (
             <div className="panel">
               {myWeekRows.map((d) => {
@@ -313,13 +352,34 @@ function Dashboard({ isViewer, onOpenModule }) {
                   <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10, flexWrap: 'wrap', rowGap: 4 }}>
                     <span className="chip" style={{ color: c, borderColor: c, flex: '0 0 auto' }}>{d.modules?.code}</span>
                     <span style={{ color: '#eaf4ff', minWidth: 120, flex: '1 1 0' }}>{d.title}</span>
-                    <span className="text-sm" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', flex: '0 0 auto', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
-                      {d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
+                    {/* Date and ✓ travel together in ONE right-hand group so the s19 wrap fix still
+                        holds: on a narrow phone the whole group drops to its own line instead of the
+                        tick stranding itself below a squeezed title. */}
+                    <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span className="text-sm" style={{ whiteSpace: 'nowrap', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
+                        {d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
+                      </span>
+                      {!isViewer && (
+                        <button onClick={() => markDone(d)} className="icon-btn"
+                          aria-label={`Mark ${d.title} as done`} title="Mark as done"
+                          style={{ padding: 0, width: 38, justifyContent: 'center', color: 'var(--muted)', fontSize: 15 }}>✓</button>
+                      )}
                     </span>
                   </div>
                 )
               })}
             </div>
+          )}
+          {justDone && (
+            <div className="panel p-3 mt-3 flex items-center gap-3" style={{ flexWrap: 'wrap', rowGap: 8 }}>
+              <span className="text-sm muted" style={{ minWidth: 120, flex: '1 1 0' }}>
+                ✓ {justDone.modules?.code} · {justDone.title} — ticked off.
+              </span>
+              <button onClick={() => undoDone(justDone)} className="btn small ghost" style={{ flex: '0 0 auto' }}>Undo</button>
+            </div>
+          )}
+          {!myWeekRows.length && justDone && (
+            <p className="muted text-sm mt-3">Nothing else coming up — all clear. 🎉</p>
           )}
         </Section>
 
@@ -347,11 +407,9 @@ function Dashboard({ isViewer, onOpenModule }) {
           </Section>
         )}
 
-        {/* 📆 Classes-in-my-calendar — owner-only opt-in (PLAN-calendar-feed.md §3). The card
-            itself also self-hides for anyone the my_ics_token() RPC returns null for, but the
-            isViewer guard here keeps it out of a viewer's render pass entirely, same pattern as
-            the Classes and Objectives sections around it. */}
-        {!isViewer && <CalendarCard />}
+        {/* 📅 Classes-in-my-calendar moved to a header icon in s22 (it was a full card here) —
+            subscribing is a once-off and the instructions were costing a screen of dashboard for
+            ever after. See <Header> above. */}
 
         {!isViewer && (() => {
           const objectives = goals.filter((g) => g.kind !== 'class')
@@ -550,6 +608,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [openSummary, setOpenSummary] = useState(null)
   const [showKit, setShowKit] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [statusError, setStatusError] = useState('')
 
   useEffect(() => {
     (async () => {
@@ -610,6 +669,20 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const overviewBriefs = summaries.filter((s) => s.assessment_id && isOverviewBrief(s))
   const briefsFor = (assessmentId) => summaries.filter((s) => s.assessment_id === assessmentId && !isOverviewBrief(s))
   const accent = mod.colour || 'var(--cyan)'
+
+  // The permanent home of the tick (s22). The dashboard's ✓ is the quick one and keeps a single
+  // undo line; THIS list shows every assessment whatever its status, so a tick made days ago is
+  // still findable and reversible here. Optimistic, with a revert on failure.
+  async function toggleAssessment(a) {
+    const status = a.status === 'upcoming' ? 'submitted' : 'upcoming'
+    setStatusError('')
+    setAssessments((as) => as.map((x) => (x.id === a.id ? { ...x, status } : x)))
+    const { error: e } = await supabase.from('assessments').update({ status }).eq('id', a.id)
+    if (e) {
+      setAssessments((as) => as.map((x) => (x.id === a.id ? { ...x, status: a.status } : x)))
+      setStatusError('Could not save that — ' + e.message)
+    }
+  }
 
   return (
     <div className="min-h-screen">
@@ -728,14 +801,31 @@ function ModulePage({ code, isViewer, userId, onBack }) {
               ))}
             </div>
           )}
+          {statusError && (
+            <div className="panel p-3 mb-3 text-sm" style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>{statusError}</div>
+          )}
           <div className="space-y-3">
             {assessments.map((a) => {
               const briefs = briefsFor(a.id)
+              const done = a.status !== 'upcoming'
               return (
-                <div key={a.id} className="panel p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <span style={{ color: '#eaf4ff' }}>{a.title}</span>
-                    <span className="muted text-sm" style={{ flex: '0 0 auto' }}>{a.due_date || 'date TBC'}</span>
+                <div key={a.id} className="panel p-4" style={done ? { opacity: 0.55 } : undefined}>
+                  <div className="flex items-center gap-3" style={{ flexWrap: 'wrap', rowGap: 6 }}>
+                    <span style={{ color: '#eaf4ff', minWidth: 140, flex: '1 1 0',
+                      textDecoration: done ? 'line-through' : 'none' }}>{a.title}</span>
+                    <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>{a.due_date || 'date TBC'}</span>
+                      {/* Tick / untick. Hidden for the viewer (Lize) — hub_write would refuse it
+                          anyway, so showing the button would only ever produce an error. */}
+                      {!isViewer && (
+                        <button onClick={() => toggleAssessment(a)} className="icon-btn"
+                          aria-label={done ? `Put ${a.title} back on the list` : `Mark ${a.title} as done`}
+                          title={done ? 'Put it back on the list' : 'Mark as done'}
+                          style={{ padding: 0, width: 38, justifyContent: 'center', fontSize: 15,
+                            color: done ? 'var(--cyan)' : 'var(--muted)',
+                            borderColor: done ? 'var(--cyan)' : 'var(--line)' }}>{done ? '↺' : '✓'}</button>
+                      )}
+                    </span>
                   </div>
                   {briefs.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">

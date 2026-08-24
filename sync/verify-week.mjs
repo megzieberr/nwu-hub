@@ -82,6 +82,22 @@ const edge = myWeek([
 check('grace: day -4 boundary still shows; one overdue line per module (most recent miss)',
   edge.map((d) => d.id), ['e4', 'older'])
 
+// ---- ticking a deadline off (s22) ----
+// Megan: "you never added a way to tick it off?" — the ✓ writes status='submitted', and a ticked
+// row must leave My Week at once, INCLUDING a red overdue one (that's the whole point: a deadline
+// she has actually handed in should stop shouting before its 4-day grace runs out).
+const ticked = myWeek([
+  { id: 't1', title: 'Handed in', due_date: '2026-08-23', status: 'submitted', modules: { code: 'ALDE122' } },
+  { id: 't2', title: 'Still open', due_date: '2026-08-30', status: 'upcoming', modules: { code: 'ALDE122' } },
+  { id: 't3', title: 'Missed, then ticked', due_date: '2026-08-15', status: 'submitted', modules: { code: 'ENGV121' } },
+], TODAY)
+check('tick: a submitted deadline goes; the module falls back to its next open one', ticked.map((d) => d.id), ['t2'])
+check('tick: ticking off an OVERDUE row clears it too', ticked.filter((d) => d.overdue).length, 0)
+check('tick: a row carrying NO status still shows (pre-s22 fixtures and callers)',
+  myWeek([{ id: 'ns', title: 'No status', due_date: '2026-08-23', modules: { code: 'MATH121' } }], TODAY).map((d) => d.id), ['ns'])
+check('tick: every deadline ticked → the card empties',
+  myWeek([{ id: 'z', title: 'Z', due_date: '2026-08-23', status: 'graded', modules: { code: 'SECL121' } }], TODAY), [])
+
 // ---- labels ----
 check('dueLabel: today', dueLabel(0), 'today')
 check('dueLabel: tomorrow', dueLabel(1), 'tomorrow')

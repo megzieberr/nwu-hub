@@ -35,6 +35,11 @@ export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10))
   const missed = new Map()
   for (const d of deadlines || []) {
     if (!d || !d.due_date) continue
+    // A ticked-off deadline leaves the card (s22 — the ✓ writes status='submitted'). The dashboard
+    // query already asks only for 'upcoming', so this is the belt to that braces: "ticked = gone"
+    // is now true of the decision itself, not just of one caller's .eq() filter. A row with NO
+    // status at all still counts — the test fixtures and the pre-s22 callers never set one.
+    if (d.status && d.status !== 'upcoming') continue
     const days = daysUntil(d.due_date, today)
     if (days === null) continue
     const key = d.modules?.code || d.module_id
