@@ -42,7 +42,7 @@ export default function App() {
       {view.name === 'module' ? (
         <ModulePage code={view.code} isViewer={isViewer} userId={session.user.id} onBack={() => setView({ name: 'dashboard' })} />
       ) : (
-        <Dashboard isViewer={isViewer} onOpenModule={(code) => setView({ name: 'module', code })} />
+        <Dashboard isViewer={isViewer} userId={session.user.id} onOpenModule={(code) => setView({ name: 'module', code })} />
       )}
       {/* The Tests & Exams bubble rides above every view. Lize (viewer) sees the codes too — they're
           class-wide — but read-only: no add/fix, no editing (enforced by RLS and hidden in the UI). */}
@@ -187,7 +187,7 @@ function Login() {
   )
 }
 
-function Dashboard({ isViewer, onOpenModule }) {
+function Dashboard({ isViewer, userId, onOpenModule }) {
   const [name, setName] = useState('')
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
@@ -211,13 +211,20 @@ function Dashboard({ isViewer, onOpenModule }) {
       // ...and keep a hidden module's assessments out of the Quest Log too, so nothing but its
       // announcements ever surfaces on the dashboard.
       setDeadlines((a.data || []).filter((d) => !d.modules?.hidden))
-      // Personal study goals are owner-only — a read-only viewer never sees this section.
-      // Done ones are fetched too but hidden by default (tucked under the "Done" tab so a
+      // The To Do List, fetched for BOTH accounts since s22 (Lize asked for her own).
+      //
+      // `goals` carries 0001's owner-only RLS — 0002 deliberately left it OUT of the shared
+      // hub_read/hub_write pair so personal goals stay private. That one rule already gives each
+      // account its own list: this identical query returns Megan's rows to Megan and Lize's to
+      // Lize, and neither can see the other's. Lize's therefore starts empty and only ever holds
+      // what she types in, since the eFundi agent writes its goals under Megan's owner id.
+      //
+      // Done ones are fetched too but hidden by default (tucked under the "Done" toggle so a
       // mistaken tick can be undone); active ones show, ordered by target date.
+      const g = await supabase.from('goals').select('*, modules(code,colour)')
+        .order('done').order('target_date', { nullsFirst: false })
+      setGoals(g.data || [])
       if (!isViewer) {
-        const g = await supabase.from('goals').select('*, modules(code,colour)')
-          .order('done').order('target_date', { nullsFirst: false })
-        setGoals(g.data || [])
         // Latest eFundi sync run (owner-only via RLS). Table may not exist pre-0005 → error
         // object, not a throw, so this stays silent and the indicator simply hides.
         const ls = await supabase.from('efundi_sync_runs')
@@ -297,7 +304,46 @@ function Dashboard({ isViewer, onOpenModule }) {
     const { error: e } = await supabase.from('goals').update({ done }).eq('id', goal.id)
     if (e) {
       setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, done: goal.done } : g)))
-      setError('Could not save objective — ' + e.message)
+      setError('Could not save that — ' + e.message)
+    }
+  }
+
+  // Add something by hand (s22 — Megan's ask, and the only way Lize's list ever gets anything).
+  //
+  // kind stays 'task' and is_test stays at its false default, ON PURPOSE: those are the two
+  // columns send-push filters on (`kind='class'` for the ~45-min class nudge, `is_test=true` for
+  // the test-morning one), so a hand-written item can never set off a phone notification for
+  // either of them. source stays null too, which is what marks it hand-made — the eFundi agent
+  // stamps 'efundi-agent', and its update path only ever reconsiders rows where kind='class',
+  // so it can't reach these.
+  //
+  // owner must be set explicitly: the goals insert policy checks `owner = auth.uid()`, and there
+  // is no column default, so an insert without it is rejected rather than silently mis-filed.
+  async function addGoal({ text, targetDate, moduleId }) {
+    const row = {
+      owner: userId,
+      module_id: moduleId || null,
+      text: text.trim().slice(0, 300),
+      target_date: targetDate || null,
+      kind: 'task',
+      done: false,
+    }
+    const { data, error: e } = await supabase.from('goals')
+      .insert(row).select('*, modules(code,colour)').single()
+    if (e) { setError('Could not add that — ' + e.message); return false }
+    setGoals((gs) => [...gs, data])
+    return true
+  }
+
+  // Only offered on hand-added rows (source null) — see the To Do List section below. Agent-written
+  // objectives keep the tick alone, so a tap can't quietly delete something eFundi put there.
+  async function deleteGoal(goal) {
+    const before = goals
+    setGoals((gs) => gs.filter((g) => g.id !== goal.id))
+    const { error: e } = await supabase.from('goals').delete().eq('id', goal.id)
+    if (e) {
+      setGoals(before)
+      setError('Could not delete that — ' + e.message)
     }
   }
 
@@ -411,27 +457,38 @@ function Dashboard({ isViewer, onOpenModule }) {
             subscribing is a once-off and the instructions were costing a screen of dashboard for
             ever after. See <Header> above. */}
 
-        {!isViewer && (() => {
-          const objectives = goals.filter((g) => g.kind !== 'class')
-          const active = objectives.filter((g) => !g.done)
-          const done = objectives.filter((g) => g.done)
+        {/* To Do List — "Objectives" until s22. Shown to BOTH accounts now (Lize's ask); RLS makes
+            it per-person, so each sees only her own. No `empty` prop on the Section: `empty`
+            replaces the children outright, which would hide the add form on the very list that
+            needs it most — an empty one. The panel says "all clear" itself instead. */}
+        {(() => {
+          const todos = goals.filter((g) => g.kind !== 'class')
+          const active = todos.filter((g) => !g.done)
+          const done = todos.filter((g) => g.done)
           return (
-            <Section title="Objectives" empty={!objectives.length && 'No goals set.'}>
+            <Section title="To Do List">
               <div className="panel">
                 {active.length
-                  ? active.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)
+                  ? active.map((g) => (
+                      <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal}
+                        onDelete={g.source ? null : deleteGoal} />
+                    ))
                   : <div className="row"><span className="muted text-sm">All clear — nothing outstanding.</span></div>}
+                <AddTodoRow modules={modules} onAdd={addGoal} />
               </div>
               {done.length > 0 && (
                 <div className="mt-3">
                   <button onClick={() => setShowDone((v) => !v)} className="btn small ghost"
                     aria-expanded={showDone}
                     style={{ borderColor: 'var(--line-strong)', color: 'var(--muted)' }}>
-                    {showDone ? '▾' : '▸'} Objectives Done ({done.length})
+                    {showDone ? '▾' : '▸'} Done ({done.length})
                   </button>
                   {showDone && (
                     <div className="panel mt-2" style={{ opacity: 0.9 }}>
-                      {done.map((g) => <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal} />)}
+                      {done.map((g) => (
+                        <ObjectiveRow key={g.id} g={g} onToggle={toggleGoal}
+                          onDelete={g.source ? null : deleteGoal} />
+                      ))}
                     </div>
                   )}
                 </div>
@@ -564,9 +621,13 @@ function ClassRow({ g }) {
 
 // One objective row. Ticking it moves it out of the active list (vanishes) into the "Done"
 // tab — no strike-through, no pile-up. Untick from the Done tab to bring it back.
-function ObjectiveRow({ g, onToggle }) {
+function ObjectiveRow({ g, onToggle, onDelete }) {
+  // The eFundi agent prefixes its own text with "CODE: " (s17), so a chip there would say the
+  // module twice. A hand-added item carries the module in the column instead — chip it.
+  const code = g.modules?.code
+  const showChip = !!code && !String(g.text || '').startsWith(code)
   return (
-    <div className="row" style={{ gap: 12 }}>
+    <div className="row" style={{ gap: 12, flexWrap: 'wrap', rowGap: 6 }}>
       <button
         onClick={() => onToggle(g)}
         aria-label={g.done ? 'Mark not done' : 'Mark done'}
@@ -577,7 +638,10 @@ function ObjectiveRow({ g, onToggle }) {
           color: '#04121f', fontWeight: 900, fontSize: 14, lineHeight: '18px', cursor: 'pointer',
         }}
       >{g.done ? '✓' : ''}</button>
-      <span style={{ flex: 1, minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>
+      <span style={{ flex: '1 1 140px', minWidth: 0, color: g.done ? 'var(--muted)' : 'var(--text)' }}>
+        {showChip && (
+          <span className="chip" style={{ marginRight: 8, color: g.modules?.colour || 'var(--cyan)', borderColor: g.modules?.colour || 'var(--cyan)' }}>{code}</span>
+        )}
         {g.text}
         {g.link && (
           <a
@@ -590,8 +654,54 @@ function ObjectiveRow({ g, onToggle }) {
           >Join →</a>
         )}
       </span>
-      {g.target_date && <span className="muted text-sm">{g.target_date}</span>}
+      {g.target_date && <span className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>{g.target_date}</span>}
+      {onDelete && (
+        <button onClick={() => onDelete(g)} aria-label={`Delete ${g.text}`} title="Delete"
+          style={{
+            flex: '0 0 auto', width: 30, height: 30, borderRadius: 8, cursor: 'pointer',
+            border: '1px solid var(--line)', background: 'transparent', color: 'var(--muted)',
+            fontSize: 13, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>✕</button>
+      )}
     </div>
+  )
+}
+
+// The "add something" row that sits at the bottom of the To Do List panel (s22). Deliberately a
+// <form> so Enter submits — on a phone that's the difference between typing a to-do and hunting
+// for a button. Module and date are both optional; a bare line of text is a valid to-do.
+function AddTodoRow({ modules, onAdd }) {
+  const [text, setText] = useState('')
+  const [targetDate, setTargetDate] = useState('')
+  const [moduleId, setModuleId] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(e) {
+    e.preventDefault()
+    if (!text.trim() || busy) return
+    setBusy(true)
+    const ok = await onAdd({ text, targetDate, moduleId })
+    setBusy(false)
+    // Only clear on success — a failed insert must not eat what she typed.
+    if (ok) { setText(''); setTargetDate(''); setModuleId('') }
+  }
+
+  return (
+    <form onSubmit={submit} className="row" style={{ gap: 8, flexWrap: 'wrap', rowGap: 8 }}>
+      <input className="input" value={text} onChange={(e) => setText(e.target.value)}
+        aria-label="Add something to do" placeholder="Add something to do…"
+        maxLength={300} style={{ flex: '1 1 180px', minWidth: 0 }} />
+      <input className="input" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)}
+        aria-label="Date (optional)" style={{ flex: '0 0 auto', width: 150 }} />
+      <select className="input" value={moduleId} onChange={(e) => setModuleId(e.target.value)}
+        aria-label="Module (optional)" style={{ flex: '0 0 auto', width: 132 }}>
+        <option value="">No module</option>
+        {modules.map((m) => <option key={m.id} value={m.id}>{m.code}</option>)}
+      </select>
+      <button className="btn small" disabled={!text.trim() || busy} style={{ flex: '0 0 auto' }}>
+        {busy ? 'Adding…' : '＋ Add'}
+      </button>
+    </form>
   )
 }
 
