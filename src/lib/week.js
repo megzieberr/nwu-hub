@@ -31,8 +31,8 @@ export function weekAhead(assessments, today = new Date().toISOString().slice(0,
 // visible as a red `overdue` row for QUEST_OVERDUE_GRACE_DAYS, then ages out on its own. Without
 // this, a deadline she missed would vanish at midnight — the exact failure s18 was built to stop.
 export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10)) {
-  const upcoming = new Map()
-  const missed = new Map()
+  const upcoming = new Map()   // module → the rows sharing its SOONEST upcoming day
+  const missed = new Map()     // module → the rows sharing its most recent missed day
   for (const d of deadlines || []) {
     if (!d || !d.due_date) continue
     // A ticked-off deadline leaves the card (s22 — the ✓ writes status='submitted'). The dashboard
@@ -44,18 +44,35 @@ export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10))
     if (days === null) continue
     const key = d.modules?.code || d.module_id
     if (days >= 0) {
-      const prev = upcoming.get(key)
-      if (!prev || days < prev.days) upcoming.set(key, { ...d, days })
+      const g = upcoming.get(key)
+      if (!g || days < g[0].days) upcoming.set(key, [{ ...d, days }])
+      else if (days === g[0].days) g.push({ ...d, days })
     } else if (days >= -QUEST_OVERDUE_GRACE_DAYS) {
-      const prev = missed.get(key)
-      if (!prev || days > prev.days) missed.set(key, { ...d, days }) // most recently missed
+      const g = missed.get(key)
+      if (!g || days > g[0].days) missed.set(key, [{ ...d, days }])  // most recently missed
+      else if (days === g[0].days) g.push({ ...d, days })
     }
   }
   return [
-    ...[...missed.values()].map((d) => ({ ...d, overdue: true, thisWeek: false })),
-    ...[...upcoming.values()].map((d) => ({ ...d, overdue: false, thisWeek: d.days <= WEEK_AHEAD_DAYS })),
+    ...[...missed.values()].map((g) => ({ ...collapse(g), overdue: true, thisWeek: false })),
+    ...[...upcoming.values()].map((g) => {
+      const r = collapse(g)
+      return { ...r, overdue: false, thisWeek: r.days <= WEEK_AHEAD_DAYS }
+    }),
   ].sort((a, b) => a.days - b.days ||
     String(a.modules?.code || '').localeCompare(String(b.modules?.code || '')))
+}
+
+// Several deadlines can land on ONE day — EDCC125's four tests all close 7 October. My Week has
+// room for a single line per module, and it used to keep whichever of them the fetch happened to
+// return first: Megan's 2026-08-24 dashboard read "Test 3" when Test 1, 2 and 4 were equally due,
+// and a later load could just as well have said "Test 1". Two fixes in one place — sort by title
+// so the line's identity is STABLE across loads, and carry `alsoDue` so the row can own up to the
+// others instead of silently hiding three of them.
+function collapse(group) {
+  const sorted = group.slice().sort((a, b) =>
+    String(a.title || '').localeCompare(String(b.title || '')))
+  return { ...sorted[0], alsoDue: sorted.length - 1 }
 }
 
 // 'today' / 'tomorrow' / 'in N days' — the calm relative label next to a date.

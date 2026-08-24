@@ -98,6 +98,38 @@ check('tick: a row carrying NO status still shows (pre-s22 fixtures and callers)
 check('tick: every deadline ticked → the card empties',
   myWeek([{ id: 'z', title: 'Z', due_date: '2026-08-23', status: 'graded', modules: { code: 'SECL121' } }], TODAY), [])
 
+// ---- several deadlines on ONE day (s22b) ----
+// The real case: EDCC125's four tests all close 7 Oct, and Megan's dashboard showed "Test 3" as if
+// it were the only one — whichever row the fetch returned first won. The line must now be stable
+// (lowest title) and must own up to the others.
+const edcc = [
+  { id: 't3', title: 'Test 3 · Ch 3', due_date: '2026-10-07', modules: { code: 'EDCC125' } },
+  { id: 't1', title: 'Test 1 · Ch 1', due_date: '2026-10-07', modules: { code: 'EDCC125' } },
+  { id: 't4', title: 'Test 4 · Ch 4', due_date: '2026-10-07', modules: { code: 'EDCC125' } },
+  { id: 't2', title: 'Test 2 · Ch 2', due_date: '2026-10-07', modules: { code: 'EDCC125' } },
+]
+const same = myWeek(edcc, TODAY)
+check('same-day: still ONE line for the module', same.length, 1)
+check('same-day: the line is Test 1, not whichever came back first', same[0].id, 't1')
+check('same-day: it reports the other three', same[0].alsoDue, 3)
+// order of the input must not change the answer — that was the whole bug
+check('same-day: reversed fetch order gives the identical line',
+  [myWeek(edcc.slice().reverse(), TODAY)[0].id, myWeek(edcc.slice().reverse(), TODAY)[0].alsoDue], ['t1', 3])
+// a module with ONE deadline reports no others
+check('same-day: a lone deadline says + 0', myWeek([edcc[0]], TODAY)[0].alsoDue, 0)
+// a LATER deadline for the same module is not counted as sharing the day
+check('same-day: only the soonest day is grouped', myWeek([
+  ...edcc,
+  { id: 'later', title: 'Exam', due_date: '2026-11-02', modules: { code: 'EDCC125' } },
+], TODAY)[0].alsoDue, 3)
+// two missed on one day collapse the same way, and the overdue row still wins its place
+const missedTie = myWeek([
+  { id: 'mb', title: 'B missed', due_date: '2026-08-15', modules: { code: 'ALDE122' } },
+  { id: 'ma', title: 'A missed', due_date: '2026-08-15', modules: { code: 'ALDE122' } },
+], TODAY)
+check('same-day: two missed on one day collapse to one overdue line',
+  [missedTie.length, missedTie[0].id, missedTie[0].alsoDue, missedTie[0].overdue], [1, 'ma', 1, true])
+
 // ---- labels ----
 check('dueLabel: today', dueLabel(0), 'today')
 check('dueLabel: tomorrow', dueLabel(1), 'tomorrow')

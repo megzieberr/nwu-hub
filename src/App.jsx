@@ -397,7 +397,16 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
                 return (
                   <div className="row" key={d.id} style={{ borderLeft: `3px solid ${c}`, paddingLeft: 14, gap: 10, flexWrap: 'wrap', rowGap: 4 }}>
                     <span className="chip" style={{ color: c, borderColor: c, flex: '0 0 auto' }}>{d.modules?.code}</span>
-                    <span style={{ color: '#eaf4ff', minWidth: 120, flex: '1 1 0' }}>{d.title}</span>
+                    <span style={{ color: '#eaf4ff', minWidth: 120, flex: '1 1 0' }}>
+                      {d.title}
+                      {/* Others closing the same day. Named rather than hidden — the line used to
+                          show one of four EDCC125 tests and looked like the only one. */}
+                      {d.alsoDue > 0 && (
+                        <span className="muted text-sm" style={{ marginLeft: 6 }}>
+                          + {d.alsoDue} more due that day
+                        </span>
+                      )}
+                    </span>
                     {/* Date and ✓ travel together in ONE right-hand group so the s19 wrap fix still
                         holds: on a narrow phone the whole group drops to its own line instead of the
                         tick stranding itself below a squeezed title. */}
