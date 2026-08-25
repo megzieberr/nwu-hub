@@ -9,6 +9,7 @@ import { pushState, enablePush, disablePush } from './lib/push'
 import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
+import { ping, pingMuted, setPingMuted } from './lib/ping'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -125,6 +126,28 @@ function SyncAlert({ lastSync }) {
           Check GitHub → nwu-hub → Actions (a green manual "Run workflow" clears this).</>
       )}
     </div>
+  )
+}
+
+// 🔊 / 🔇 for the tick-off ping. It has an off switch on purpose: a sound with no way to silence
+// it is a nuisance the first time you tick something off in a lecture. Per device, so a phone and
+// a laptop keep their own answer — and so Lize's device does too (she ticks her own To Do List,
+// even though the deadline and assessment ticks are hidden for a viewer).
+//
+// Unmuting plays the ping straight away, so the button demonstrates what it just switched on
+// rather than leaving you to go and tick something to find out.
+function PingToggle() {
+  const [muted, setMuted] = useState(pingMuted)
+  return (
+    <button
+      onClick={() => { const next = !muted; setPingMuted(next); setMuted(next); if (!next) ping() }}
+      className="icon-btn"
+      aria-label={muted ? 'Turn the tick sound on' : 'Turn the tick sound off'}
+      title={muted ? 'Tick sound is off' : 'Tick sound is on'}
+      style={{ padding: 0, width: 38, justifyContent: 'center', fontSize: 15,
+        color: muted ? 'var(--muted)' : 'var(--cyan)',
+        borderColor: muted ? 'var(--line)' : 'var(--cyan)' }}
+    >{muted ? '🔇' : '🔊'}</button>
   )
 }
 
@@ -277,6 +300,7 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
   // vanished would be a missed deadline she still needs. The sync can't resurrect it either —
   // sync/write.js updates only worker-owned fields and never touches status.
   async function markDone(d) {
+    ping()
     setDeadlines((ds) => ds.filter((x) => x.id !== d.id))
     setJustDone(d)
     const { error: e } = await supabase.from('assessments').update({ status: 'submitted' }).eq('id', d.id)
@@ -300,6 +324,13 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
   async function toggleGoal(goal) {
     const done = !goal.done
+    // Only on the way IN. Unticking is a correction, not an achievement — rewarding it would
+    // make the sound meaningless, and double-tapping a row would turn into a toy.
+    // Fired before the await, like the optimistic state flip right below it: a ping that waits
+    // for the round trip lands after the thumb has left the screen and stops feeling like a
+    // response to the tap. The trade is a ping on a save that then fails — rare, and the row
+    // visibly springs back with the error, so it can't be mistaken for a save that worked.
+    if (done) ping()
     setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, done } : g)))
     const { error: e } = await supabase.from('goals').update({ done }).eq('id', goal.id)
     if (e) {
@@ -352,7 +383,7 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
       {/* 📅 = the classes-in-my-calendar options (s22). Owner-only: the button also self-hides
           for anyone my_ics_token() returns null for, but the guard keeps it out of a viewer's
           render pass entirely, same pattern as the Classes and Objectives sections below. */}
-      <Header>{!isViewer && <CalendarFeedButton />}</Header>
+      <Header><PingToggle />{!isViewer && <CalendarFeedButton />}</Header>
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
         <SyncAlert lastSync={lastSync} />
         {error && (
@@ -794,6 +825,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // still findable and reversible here. Optimistic, with a revert on failure.
   async function toggleAssessment(a) {
     const status = a.status === 'upcoming' ? 'submitted' : 'upcoming'
+    if (status === 'submitted') ping()  // not on the ↺ — see toggleGoal
     setStatusError('')
     setAssessments((as) => as.map((x) => (x.id === a.id ? { ...x, status } : x)))
     const { error: e } = await supabase.from('assessments').update({ status }).eq('id', a.id)
@@ -806,6 +838,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   return (
     <div className="min-h-screen">
       <Header onBack={onBack}>
+        <PingToggle />
         {!isViewer && (
           <button onClick={() => setShowKit(true)} className="icon-btn" style={{ borderColor: accent, color: accent }}>🎙️ NotebookLM</button>
         )}
