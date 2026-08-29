@@ -1019,10 +1019,12 @@ const PEN_ENABLED_KINDS = ['notes', 'timeline', 'other']
 // hers to use however she likes. Order matters here — shown in this order everywhere (legend,
 // toolbar, popovers).
 const PEN_COLORS = [
-  { key: 'yellow', dot: '🟡', bg: 'rgba(255, 214, 0, .45)', label: 'Important — use this' },
+  // No yellow: her colour docs use yellow highlights of their own, so a pen-yellow is
+  // indistinguishable from the doc's (her ruling 2026-08-29). Blue is the meaning-carrier
+  // and the one-tap default instead.
+  { key: 'blue', dot: '🔵', bg: 'rgba(56, 130, 255, .38)', label: 'Important — use this' },
   { key: 'pink', dot: '🩷', bg: 'rgba(255, 105, 180, .42)', label: "Don't understand — teach this first" },
   { key: 'green', dot: '🟢', bg: 'rgba(52, 245, 197, .38)', label: "I've got this" },
-  { key: 'blue', dot: '🔵', bg: 'rgba(56, 130, 255, .38)', label: 'Free colour — no meaning' },
   { key: 'purple', dot: '🟣', bg: 'rgba(170, 100, 255, .4)', label: 'Free colour — no meaning' },
   { key: 'orange', dot: '🟠', bg: 'rgba(255, 150, 60, .42)', label: 'Free colour — no meaning' },
 ]
@@ -1197,7 +1199,7 @@ function SummaryViewer({ summary, accent, onClose }) {
       const rect = range.getBoundingClientRect()
       removeFloaters()
       const box = floaterBase(false)
-      let chosen = 'yellow'
+      let chosen = 'blue'
       box.appendChild(buildDotRow((c) => { chosen = c }, chosen))
       const ta = buildNoteTextarea('')
       box.appendChild(ta)
