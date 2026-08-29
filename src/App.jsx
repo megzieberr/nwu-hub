@@ -10,6 +10,7 @@ import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
 import { ping, pingMuted, setPingMuted } from './lib/ping'
+import * as pen from './lib/pen'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -1010,13 +1011,366 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   )
 }
 
+// ---- Summary pen · highlight + typed notes (PLAN-summary-pen.md) ----
+// Prose-ish kinds only — flashcards/quiz/mindmap/diagram are interactive apps, not text to mark up.
+const PEN_ENABLED_KINDS = ['notes', 'timeline', 'other']
+
+// Traffic-light three carry a fixed meaning the tutor reads (read-notes.mjs); the free three are
+// hers to use however she likes. Order matters here — shown in this order everywhere (legend,
+// toolbar, popovers).
+const PEN_COLORS = [
+  { key: 'yellow', dot: '🟡', bg: 'rgba(255, 214, 0, .45)', label: 'Important — use this' },
+  { key: 'pink', dot: '🩷', bg: 'rgba(255, 105, 180, .42)', label: "Don't understand — teach this first" },
+  { key: 'green', dot: '🟢', bg: 'rgba(52, 245, 197, .38)', label: "I've got this" },
+  { key: 'blue', dot: '🔵', bg: 'rgba(56, 130, 255, .38)', label: 'Free colour — no meaning' },
+  { key: 'purple', dot: '🟣', bg: 'rgba(170, 100, 255, .4)', label: 'Free colour — no meaning' },
+  { key: 'orange', dot: '🟠', bg: 'rgba(255, 150, 60, .42)', label: 'Free colour — no meaning' },
+]
+
+// Mark colours as translucent backgrounds (not solid) so her colourful docs stay legible
+// underneath, and print-color-adjust so Save-as-PDF keeps them instead of the browser stripping
+// backgrounds by default.
+function injectPenStyle(doc) {
+  if (doc.getElementById('pen-style')) return
+  const style = doc.createElement('style')
+  style.id = 'pen-style'
+  style.textContent = `
+    mark[data-pen-id] { color: inherit; border-radius: 2px; padding: 0 1px; cursor: pointer;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    ${PEN_COLORS.map((c) => `mark[data-pen-color="${c.key}"] { background: ${c.bg}; }`).join('\n    ')}
+  `
+  ;(doc.head || doc.documentElement).appendChild(style)
+}
+
+function penBtnStyle(kind) {
+  const base = { fontSize: 12, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'sans-serif' }
+  if (kind === 'primary') return { ...base, border: '1px solid #38e1ff', background: 'rgba(56,225,255,.18)', color: '#dce9ff' }
+  if (kind === 'danger') return { ...base, border: '1px solid #24344a', background: 'rgba(255,92,122,.12)', color: '#ff5c7a' }
+  return { ...base, border: '1px solid #24344a', background: 'transparent', color: '#dce9ff' }
+}
+
+// Prevent the browser's default mousedown/pointerdown behaviour (focus shift, selection
+// collapse) so tapping a toolbar button doesn't destroy the very selection/toolbar it's acting
+// on before the click fires — the classic mousedown-before-click race.
+function noCollapse(el) {
+  el.addEventListener('mousedown', (e) => e.preventDefault())
+  el.addEventListener('pointerdown', (e) => e.preventDefault())
+}
+
 function SummaryViewer({ summary, accent, onClose }) {
   const iframeRef = useRef(null)
+  const docRef = useRef(null)
+  const cleanupRef = useRef(null)
+  const penEnabled = PEN_ENABLED_KINDS.includes(summary.kind)
+
+  const [notes, setNotes] = useState([])
+  const notesRef = useRef(notes)
+  useEffect(() => { notesRef.current = notes }, [notes])
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef(null)
+
+  function showToast(msg) {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 4000)
+  }
 
   function savePdf() {
     const w = iframeRef.current?.contentWindow
     if (w) { w.focus(); w.print() }
   }
+
+  function jumpTo(note) {
+    if (docRef.current) pen.scrollToMark(docRef.current.body, note.id)
+  }
+
+  // Orphans never carry a DOM mark, so deleting one is a plain DB delete — no unwrap needed.
+  async function deleteOrphan(note) {
+    setNotes((ns) => ns.filter((n) => n.id !== note.id))
+    const { error } = await supabase.from('summary_notes').delete().eq('id', note.id)
+    if (error) {
+      setNotes((ns) => [...ns, note].sort((a, b) => a.position - b.position))
+      showToast('Could not delete — ' + error.message)
+    }
+  }
+
+  function onIframeLoad() {
+    const doc = iframeRef.current?.contentDocument
+    if (!doc || !penEnabled) return
+    docRef.current = doc
+    injectPenStyle(doc)
+
+    let disposed = false
+    let toolbarEl = null
+    let popoverEl = null
+
+    function removeFloaters() {
+      toolbarEl?.remove(); toolbarEl = null
+      popoverEl?.remove(); popoverEl = null
+    }
+
+    function placeNear(el, rect) {
+      const win = doc.defaultView
+      Object.assign(el.style, {
+        position: 'absolute',
+        top: (rect.bottom + win.scrollY + 8) + 'px',
+        left: Math.max(4, Math.min(rect.left + win.scrollX, win.innerWidth - 220)) + 'px',
+        zIndex: 999999,
+      })
+      doc.body.appendChild(el)
+    }
+
+    function floaterBase(row) {
+      const el = doc.createElement('div')
+      Object.assign(el.style, {
+        display: 'flex', flexDirection: row ? 'row' : 'column', gap: 8, alignItems: row ? 'center' : 'stretch',
+        background: '#0b1524', border: '1px solid #24344a', borderRadius: 10,
+        padding: row ? '6px 8px' : '8px 10px', boxShadow: '0 4px 16px rgba(0,0,0,.45)',
+        fontFamily: 'sans-serif', maxWidth: 220,
+      })
+      return el
+    }
+
+    // Shared by the new-highlight toolbar, the note editor, and the existing-mark popover.
+    // `activeKey` pre-outlines the current colour; picking one re-outlines instantly.
+    function buildDotRow(onPick, activeKey) {
+      const row = doc.createElement('div')
+      Object.assign(row.style, { display: 'flex', gap: 6, alignItems: 'center' })
+      const buttons = []
+      PEN_COLORS.forEach(({ key, dot, label }) => {
+        const b = doc.createElement('button')
+        b.type = 'button'
+        b.textContent = dot
+        b.title = label
+        Object.assign(b.style, {
+          fontSize: 18, lineHeight: 1, border: 0, background: 'transparent', cursor: 'pointer',
+          padding: 3, borderRadius: 6, outline: key === activeKey ? '2px solid #fff' : 'none',
+        })
+        noCollapse(b)
+        b.addEventListener('click', (e) => {
+          e.preventDefault()
+          buttons.forEach((btn, i) => { btn.style.outline = PEN_COLORS[i].key === key ? '2px solid #fff' : 'none' })
+          onPick(key)
+        })
+        buttons.push(b)
+        row.appendChild(b)
+      })
+      return row
+    }
+
+    function buildNoteTextarea(initial) {
+      const ta = doc.createElement('textarea')
+      ta.value = initial || ''
+      ta.placeholder = 'How will you use this? (optional)'
+      Object.assign(ta.style, {
+        width: 190, minHeight: 60, background: 'rgba(2,8,22,.6)', color: '#dce9ff',
+        border: '1px solid #24344a', borderRadius: 8, padding: 6, font: '13px sans-serif', resize: 'vertical',
+      })
+      noCollapse(ta)
+      return ta
+    }
+
+    // ---- new highlight: mini toolbar (dots + 📝) below the selection ----
+    function showToolbar(sel) {
+      const captured = pen.captureSelection(doc.body, sel)
+      if (!captured) return
+      const range = sel.getRangeAt(0).cloneRange()
+      const rect = range.getBoundingClientRect()
+      if (!rect.width && !rect.height) return
+      removeFloaters()
+      const bar = floaterBase(true)
+      bar.appendChild(buildDotRow((color) => saveHighlight(captured, range, color, null)))
+      const noteBtn = doc.createElement('button')
+      noteBtn.type = 'button'
+      noteBtn.textContent = '📝'
+      noteBtn.title = 'Add a note'
+      Object.assign(noteBtn.style, { fontSize: 16, border: 0, background: 'transparent', cursor: 'pointer', padding: '3px 5px' })
+      noCollapse(noteBtn)
+      noteBtn.addEventListener('click', (e) => { e.preventDefault(); showNoteEditor(captured, range) })
+      bar.appendChild(noteBtn)
+      placeNear(bar, rect)
+      toolbarEl = bar
+    }
+
+    function showNoteEditor(captured, range) {
+      const rect = range.getBoundingClientRect()
+      removeFloaters()
+      const box = floaterBase(false)
+      let chosen = 'yellow'
+      box.appendChild(buildDotRow((c) => { chosen = c }, chosen))
+      const ta = buildNoteTextarea('')
+      box.appendChild(ta)
+      const row = doc.createElement('div')
+      Object.assign(row.style, { display: 'flex', gap: 8, justifyContent: 'flex-end' })
+      const cancel = doc.createElement('button')
+      cancel.type = 'button'; cancel.textContent = 'Cancel'
+      Object.assign(cancel.style, penBtnStyle('ghost'))
+      noCollapse(cancel)
+      cancel.addEventListener('click', (e) => { e.preventDefault(); removeFloaters() })
+      const save = doc.createElement('button')
+      save.type = 'button'; save.textContent = 'Save'
+      Object.assign(save.style, penBtnStyle('primary'))
+      noCollapse(save)
+      save.addEventListener('click', (e) => { e.preventDefault(); saveHighlight(captured, range, chosen, ta.value.trim() || null) })
+      row.appendChild(cancel); row.appendChild(save)
+      box.appendChild(row)
+      placeNear(box, rect)
+      popoverEl = box
+      ta.focus()
+    }
+
+    async function saveHighlight(captured, range, color, note) {
+      removeFloaters()
+      doc.getSelection()?.removeAllRanges()
+      const id = crypto.randomUUID()
+      const marks = pen.wrapRange(range, id, color)
+      if (!marks.length) return
+      const optimistic = {
+        id, summary_id: summary.id, quote: captured.quote, prefix: captured.prefix, suffix: captured.suffix,
+        color, note, position: captured.position, orphaned: false,
+      }
+      setNotes((ns) => [...ns, optimistic].sort((a, b) => a.position - b.position))
+      const { data, error } = await supabase.from('summary_notes')
+        .insert({ summary_id: summary.id, quote: captured.quote, prefix: captured.prefix, suffix: captured.suffix, color, note, position: captured.position })
+        .select().single()
+      if (disposed) return
+      if (error || !data) {
+        pen.unwrap(doc.body, id)
+        setNotes((ns) => ns.filter((n) => n.id !== id))
+        showToast('Could not save highlight — ' + (error?.message || 'not authorised'))
+        return
+      }
+      marks.forEach((m) => { m.dataset.penId = data.id })
+      setNotes((ns) => ns.map((n) => (n.id === id ? { ...data } : n)).sort((a, b) => a.position - b.position))
+    }
+
+    // ---- existing mark: popover (note text, colour, delete) ----
+    function showMarkPopover(note, markEl) {
+      const rect = markEl.getBoundingClientRect()
+      removeFloaters()
+      const box = floaterBase(false)
+      box.appendChild(buildDotRow((color) => {
+        const cur = notesRef.current.find((n) => n.id === note.id) || note
+        updateNote(cur, { color })
+      }, note.color))
+      const ta = buildNoteTextarea(note.note)
+      box.appendChild(ta)
+      const row = doc.createElement('div')
+      Object.assign(row.style, { display: 'flex', gap: 8, justifyContent: 'space-between' })
+      const del = doc.createElement('button')
+      del.type = 'button'; del.textContent = 'Delete'
+      Object.assign(del.style, penBtnStyle('danger'))
+      noCollapse(del)
+      del.addEventListener('click', (e) => { e.preventDefault(); deleteNote(notesRef.current.find((n) => n.id === note.id) || note) })
+      const save = doc.createElement('button')
+      save.type = 'button'; save.textContent = 'Save'
+      Object.assign(save.style, penBtnStyle('primary'))
+      noCollapse(save)
+      save.addEventListener('click', (e) => {
+        e.preventDefault()
+        const cur = notesRef.current.find((n) => n.id === note.id) || note
+        updateNote(cur, { note: ta.value.trim() || null })
+        removeFloaters()
+      })
+      row.appendChild(del); row.appendChild(save)
+      box.appendChild(row)
+      placeNear(box, rect)
+      popoverEl = box
+    }
+
+    async function updateNote(note, fields) {
+      const prev = { color: note.color, note: note.note }
+      setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...fields } : n)))
+      if (fields.color) pen.recolor(doc.body, note.id, fields.color)
+      const { error } = await supabase.from('summary_notes').update(fields).eq('id', note.id)
+      if (disposed) return
+      if (error) {
+        setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...prev } : n)))
+        if (fields.color) pen.recolor(doc.body, note.id, prev.color)
+        showToast('Could not save — ' + error.message)
+      }
+    }
+
+    async function deleteNote(note) {
+      removeFloaters()
+      pen.unwrap(doc.body, note.id)
+      setNotes((ns) => ns.filter((n) => n.id !== note.id))
+      const { error } = await supabase.from('summary_notes').delete().eq('id', note.id)
+      if (disposed) return
+      if (error) {
+        // The mark is gone (unwrap merged its text nodes), so restoring means re-finding the
+        // quote fresh rather than remembering old DOM coordinates.
+        const range = pen.findQuote(doc.body, note)
+        if (range) pen.wrapRange(range, note.id, note.color)
+        setNotes((ns) => [...ns, note].sort((a, b) => a.position - b.position))
+        showToast('Could not delete — ' + error.message)
+      }
+    }
+
+    // setTimeout, not requestAnimationFrame: rAF callbacks don't run for a document that isn't
+    // being rendered (a backgrounded tab/pane), and a plain timer needs nothing better here —
+    // this only ever needs to coalesce a burst of events into one check.
+    let pending = null
+    function onSelectionMaybe() {
+      if (pending) return
+      pending = doc.defaultView.setTimeout(() => {
+        pending = null
+        const sel = doc.getSelection()
+        if (!sel || sel.isCollapsed || !sel.rangeCount) { toolbarEl?.remove(); toolbarEl = null; return }
+        showToolbar(sel)
+      }, 0)
+    }
+    doc.addEventListener('selectionchange', onSelectionMaybe)
+    doc.addEventListener('mouseup', onSelectionMaybe)
+    doc.addEventListener('pointerup', onSelectionMaybe)
+
+    function onBodyClick(e) {
+      if ((toolbarEl && toolbarEl.contains(e.target)) || (popoverEl && popoverEl.contains(e.target))) return
+      const mark = e.target.closest && e.target.closest('mark[data-pen-id]')
+      if (!mark) { removeFloaters(); return }
+      e.preventDefault()
+      const note = notesRef.current.find((n) => n.id === mark.dataset.penId)
+      if (note) showMarkPopover(note, mark)
+    }
+    doc.body.addEventListener('click', onBodyClick)
+
+    // ---- load + render existing highlights; reconcile orphan status against reality ----
+    supabase.from('summary_notes').select('*').eq('summary_id', summary.id).order('position')
+      .then(({ data, error }) => {
+        if (disposed || error || !data) return
+        const toOrphan = [], toUnorphan = []
+        data.forEach((n) => {
+          const range = pen.findQuote(doc.body, n)
+          if (range) {
+            pen.wrapRange(range, n.id, n.color)
+            if (n.orphaned) toUnorphan.push(n.id)
+          } else if (!n.orphaned) {
+            toOrphan.push(n.id)
+          }
+        })
+        setNotes(data.map((n) => ({
+          ...n,
+          orphaned: toOrphan.includes(n.id) ? true : toUnorphan.includes(n.id) ? false : n.orphaned,
+        })))
+        if (toOrphan.length) supabase.from('summary_notes').update({ orphaned: true }).in('id', toOrphan).then(() => {})
+        if (toUnorphan.length) supabase.from('summary_notes').update({ orphaned: false }).in('id', toUnorphan).then(() => {})
+      })
+
+    cleanupRef.current = () => {
+      disposed = true
+      doc.removeEventListener('selectionchange', onSelectionMaybe)
+      doc.removeEventListener('mouseup', onSelectionMaybe)
+      doc.removeEventListener('pointerup', onSelectionMaybe)
+      doc.body.removeEventListener('click', onBodyClick)
+      removeFloaters()
+    }
+  }
+
+  useEffect(() => () => cleanupRef.current?.(), [])
+
+  const visible = notes.filter((n) => !n.orphaned)
+  const orphans = notes.filter((n) => n.orphaned)
 
   return (
     <div className="overlay p-3 sm:p-6" style={{ flexDirection: 'column' }}>
@@ -1024,11 +1378,50 @@ function SummaryViewer({ summary, accent, onClose }) {
         <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: '1px solid var(--line)' }}>
           <span className="section-label truncate">{summary.title}</span>
           <div className="flex items-center gap-2">
+            {penEnabled && (
+              <button onClick={() => setPanelOpen((v) => !v)} className="btn small ghost">
+                📝 Notes{notes.length ? ` (${notes.length})` : ''}
+              </button>
+            )}
             <button onClick={savePdf} className="btn small" style={{ background: accent, borderColor: accent, color: '#04121f' }} title="Opens your browser's Save-as-PDF">⭳ Save as PDF</button>
             <button onClick={onClose} className="icon-btn">✕</button>
           </div>
         </div>
-        <iframe ref={iframeRef} title={summary.title} srcDoc={summary.html}
+        {toast && <div className="px-4 py-2 text-sm" style={{ borderBottom: '1px solid var(--line)', color: 'var(--red)' }}>{toast}</div>}
+        {penEnabled && panelOpen && (
+          <div className="p-3 text-sm" style={{ borderBottom: '1px solid var(--line)', maxHeight: '38%', overflowY: 'auto', background: 'rgba(2,8,22,.4)' }}>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {PEN_COLORS.map((c) => <span key={c.key} className="chip" title={c.label}>{c.dot} {c.label}</span>)}
+            </div>
+            {!notes.length && <p className="muted text-xs">Select text in the doc to highlight it.</p>}
+            <ul className="space-y-1.5">
+              {visible.map((n) => (
+                <li key={n.id} onClick={() => jumpTo(n)} className="cursor-pointer" style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid var(--line)' }}>
+                  <div className="flex items-center gap-2">
+                    <span>{PEN_COLORS.find((c) => c.key === n.color)?.dot}</span>
+                    <span className="text-xs truncate" style={{ color: 'var(--text)' }}>&ldquo;{n.quote}&rdquo;</span>
+                  </div>
+                  {n.note && <div className="muted text-xs mt-1">{n.note}</div>}
+                </li>
+              ))}
+            </ul>
+            {!!orphans.length && (
+              <>
+                <div className="section-label mt-3 mb-1" style={{ color: 'var(--red)' }}>⚠ Lost their place</div>
+                <ul className="space-y-1.5">
+                  {orphans.map((n) => (
+                    <li key={n.id} style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid var(--line)' }}>
+                      <div className="text-xs truncate muted">&ldquo;{n.quote}&rdquo;</div>
+                      {n.note && <div className="muted text-xs mt-1">{n.note}</div>}
+                      <button onClick={() => deleteOrphan(n)} className="btn small ghost mt-1" style={{ fontSize: 11 }}>Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+        <iframe ref={iframeRef} title={summary.title} srcDoc={summary.html} onLoad={onIframeLoad}
           sandbox="allow-scripts allow-same-origin allow-modals allow-popups" className="flex-1 w-full" style={{ background: '#fff', border: 0 }} />
       </div>
     </div>
