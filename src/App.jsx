@@ -1169,7 +1169,9 @@ function SummaryViewer({ summary, accent, onClose }) {
         width: 190, minHeight: 60, background: 'rgba(2,8,22,.6)', color: '#dce9ff',
         border: '1px solid #24344a', borderRadius: 8, padding: 6, font: '13px sans-serif', resize: 'vertical',
       })
-      noCollapse(ta)
+      // No noCollapse here: preventing mousedown/pointerdown on a textarea blocks click-to-focus,
+      // so it could never take a caret (the S Pen bug, 2026-08-30). The selection it was guarding
+      // is already captured by the time this box exists, so collapsing it costs nothing.
       return ta
     }
 
@@ -1310,18 +1312,25 @@ function SummaryViewer({ summary, accent, onClose }) {
       }
     }
 
-    // setTimeout, not requestAnimationFrame: rAF callbacks don't run for a document that isn't
-    // being rendered (a backgrounded tab/pane), and a plain timer needs nothing better here —
-    // this only ever needs to coalesce a burst of events into one check.
+    // Trailing debounce, NOT per-event: selectionchange fires continuously while the S Pen drags,
+    // and showToolbar() re-scans the whole document (buildIndex) plus tears down and rebuilds the
+    // toolbar each call — measured 120 full rescans in one simulated drag on a 55K-char doc, which
+    // saturated her tablet until the page glitched/went white (2026-08-30). Now a changing
+    // selection only resets the timer; the one scan happens 250 ms after the pen settles. The
+    // collapsed check stays synchronous so the toolbar still vanishes instantly on deselect.
+    // (setTimeout, not requestAnimationFrame: rAF doesn't run for a non-rendered document.)
     let pending = null
     function onSelectionMaybe() {
-      if (pending) return
-      pending = doc.defaultView.setTimeout(() => {
+      const win = doc.defaultView
+      if (pending) { win.clearTimeout(pending); pending = null }
+      const sel = doc.getSelection()
+      if (!sel || sel.isCollapsed || !sel.rangeCount) { toolbarEl?.remove(); toolbarEl = null; return }
+      pending = win.setTimeout(() => {
         pending = null
-        const sel = doc.getSelection()
-        if (!sel || sel.isCollapsed || !sel.rangeCount) { toolbarEl?.remove(); toolbarEl = null; return }
-        showToolbar(sel)
-      }, 0)
+        const settled = doc.getSelection()
+        if (!settled || settled.isCollapsed || !settled.rangeCount) { toolbarEl?.remove(); toolbarEl = null; return }
+        showToolbar(settled)
+      }, 250)
     }
     doc.addEventListener('selectionchange', onSelectionMaybe)
     doc.addEventListener('mouseup', onSelectionMaybe)
@@ -1361,6 +1370,7 @@ function SummaryViewer({ summary, accent, onClose }) {
 
     cleanupRef.current = () => {
       disposed = true
+      if (pending) { doc.defaultView?.clearTimeout(pending); pending = null }
       doc.removeEventListener('selectionchange', onSelectionMaybe)
       doc.removeEventListener('mouseup', onSelectionMaybe)
       doc.removeEventListener('pointerup', onSelectionMaybe)
