@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
 import { syncHealthView } from './lib/synchealth'
 
-// The amber the hub already warns in (App.jsx syncStatusColour / SyncAlert).
+// The amber the hub already warns in (App.jsx SyncAlert's partial-run banner).
 const AMBER = '#f0b232'
 
 // The header's sync-health line — "is eFundi still coming in?"

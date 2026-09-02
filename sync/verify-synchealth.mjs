@@ -2,7 +2,7 @@
 // The decisions that matter: when does a quiet sync become an ALARM, and does the timestamp read
 // in South African time (the sync's own clock) rather than the browser's or UTC's.
 // Run: node sync/verify-synchealth.mjs   (exit 0 = all green)
-import { syncHealthView, STALE_HOURS } from '../src/lib/synchealth.js'
+import { syncHealthView, syncFailure, STALE_HOURS } from '../src/lib/synchealth.js'
 
 let pass = 0
 let fail = 0
@@ -101,6 +101,36 @@ for (const [n, v] of [
   check(`copy: ${n} label has no em-dash`, /[—–]/.test(v.label), false)
   check(`copy: ${n} state matches its label voice`, v.state, n)
 }
+
+// ---- syncFailure: the OTHER surface (the banner) ------------------------------------------------
+// Megan's 2026-09-02 ruling folded the two freshness indicators into one, so this half now answers
+// only "did the last run fail?" and never touches the clock. These checks exist mostly to keep the
+// two halves from drifting back into one another.
+check('a clean run says nothing', syncFailure({ status: 'ok' }), null)
+check('auth_failed → auth', syncFailure({ status: 'auth_failed' }), 'auth')
+check('error → error', syncFailure({ status: 'error' }), 'error')
+check('no run row at all → nothing to say', syncFailure(null), null)
+check('an unknown future status is not treated as a failure', syncFailure({ status: 'queued' }), null)
+
+// partial is the one this fold could have silently dropped: it was ONLY ever visible on the panel
+// line that is now gone, and it is not 'ok', so it never refreshes last_ok either. If this check
+// fails, a half-finished sync has gone completely quiet again.
+check('partial → partial (the surface the retired panel line used to own)',
+  syncFailure({ status: 'partial' }), 'partial')
+
+// The two halves must stay independent: a FRESH run that failed still reports its failure, and a
+// STALE-but-clean history still reports none. This is the whole reason there are two functions.
+const failedJustNow = { status: 'error', finished_at: '2026-09-02T07:55:00+02:00' }
+check('a failure five minutes old is still a failure (the header would read fresh)',
+  [syncFailure(failedJustNow), syncHealthView('2026-09-02T06:12:00+02:00', NOW).state],
+  ['error', 'ok'])
+check('a long-stale but never-failed sync is the header\'s business, not the banner\'s',
+  [syncFailure({ status: 'ok' }), syncHealthView('2026-08-31T06:00:00+02:00', NOW).state],
+  [null, 'stale'])
+
+// Staleness moved OUT of this half. Nothing about an old timestamp may make it speak.
+check('an ancient clean run does not make the banner fire',
+  syncFailure({ status: 'ok', finished_at: '2026-08-01T06:00:00+02:00' }), null)
 
 console.log(`${pass}/${pass + fail} checks passed`)
 process.exit(fail ? 1 : 0)

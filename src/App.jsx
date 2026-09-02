@@ -10,6 +10,7 @@ import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
 import SyncHealth from './SyncHealth'
+import { syncFailure } from './lib/synchealth'
 import { ping, pingMuted, setPingMuted } from './lib/ping'
 import * as pen from './lib/pen'
 
@@ -58,7 +59,7 @@ function Centered({ children }) {
   return <div className="min-h-screen flex items-center justify-center muted">{children}</div>
 }
 
-// Relative time for the last-sync line: "just now" / "3h ago" / "2d ago", else a date.
+// Relative time for the failure banner's "last try": "just now" / "3h ago" / "2d ago", else a date.
 function timeAgo(ts) {
   if (!ts) return 'never'
   const then = new Date(ts).getTime()
@@ -71,12 +72,6 @@ function timeAgo(ts) {
   const days = Math.round(hrs / 24)
   if (days < 7) return `${days}d ago`
   return new Date(ts).toLocaleDateString()
-}
-
-function syncStatusColour(status) {
-  if (status === 'auth_failed' || status === 'error') return 'var(--red)'
-  if (status === 'partial') return '#f0b232'
-  return 'var(--cyan)'
 }
 
 // Small UTC date helpers for the weekly Classes window. All take/return 'YYYY-MM-DD'; noon-UTC
@@ -93,25 +88,23 @@ function mondayOf(dateStr) {
   return addDays(dateStr, -weekdayIndex(dateStr))
 }
 
-// The sync fails SILENTLY by design (no push, no email) — this banner is the one loud surface.
-// Two triggers: the last run failed outright, or no run has landed in >26h (schedule is every
-// 12h; 26h = both daily runs missed even allowing for GitHub's best-effort cron drift). The
-// stale case matters most: a dead schedule writes NO run rows, so only the clock can catch it.
-const SYNC_STALE_MS = 26 * 60 * 60 * 1000
-export function syncProblem(lastSync, now = Date.now()) {
-  if (!lastSync) return null
-  if (lastSync.status === 'auth_failed') return 'auth'
-  if (lastSync.status === 'error') return 'error'
-  const t = new Date(lastSync.finished_at || lastSync.started_at).getTime()
-  if (!isNaN(t) && now - t > SYNC_STALE_MS) return 'stale'
-  return null
-}
-
+// The sync fails SILENTLY by design (no push, no email), so the hub is the only loud surface.
+// TWO surfaces now, answering two different questions, and they must not be confused:
+//
+//   • the header line (SyncHealth) — "how long since one WORKED?" Freshness, including a schedule
+//     that has quietly stopped firing. It owns staleness, at 14h.
+//   • this banner — "did the last run FAIL, and what do I do about it?" A failure is worth saying
+//     the moment it happens rather than waiting 14h for the header to go amber, and it is the only
+//     place that can tell her WHICH thing broke and where to go and fix it.
+//
+// The 26h stale window that used to live here is gone: it was a second, looser answer to the
+// header's question, and two thresholds for one idea is how you end up trusting neither.
 function SyncAlert({ lastSync }) {
-  const problem = syncProblem(lastSync)
+  const problem = syncFailure(lastSync)
   if (!problem) return null
   const when = timeAgo(lastSync.finished_at || lastSync.started_at)
-  const colour = problem === 'stale' ? '#f0b232' : 'var(--red)'
+  // A partial run still delivered most of the work, so it warns in amber rather than shouting red.
+  const colour = problem === 'partial' ? '#f0b232' : 'var(--red)'
   return (
     <div className="panel p-4 text-sm" style={{ borderColor: colour, color: colour }}>
       {problem === 'auth' && (
@@ -123,9 +116,12 @@ function SyncAlert({ lastSync }) {
         <>⚠️ <b>eFundi sync failed</b> on its last run ({when}) — check the log: GitHub → nwu-hub →
           Actions → eFundi sync. New eFundi posts may not be arriving.</>
       )}
-      {problem === 'stale' && (
-        <>⚠️ <b>eFundi sync hasn't run since {when}</b> — the schedule may be stuck or disabled.
-          Check GitHub → nwu-hub → Actions (a green manual "Run workflow" clears this).</>
+      {/* Kept from the retired panel line, which was the only thing that ever showed "· partial".
+          It matters more than it looks: a partial run is not 'ok', so it never refreshes last_ok,
+          and the header would sit quiet for 14h before admitting anything was wrong. */}
+      {problem === 'partial' && (
+        <>⚠️ <b>eFundi sync only partly finished</b> on its last run ({when}) — some modules may be
+          out of date. Check the log: GitHub → nwu-hub → Actions → eFundi sync.</>
       )}
     </div>
   )
@@ -257,10 +253,12 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
         .order('done').order('target_date', { nullsFirst: false })
       setGoals(g.data || [])
       if (!isViewer) {
-        // Latest eFundi sync run (owner-only via RLS). Table may not exist pre-0005 → error
-        // object, not a throw, so this stays silent and the indicator simply hides.
+        // Latest eFundi sync run (owner-only via RLS, the 0005 owner_all policy). This feeds the
+        // FAILURE banner only — freshness is the header line's job, off the sync_health() RPC.
+        // Table may not exist pre-0005 → error object, not a throw, so this stays silent and the
+        // banner simply hides.
         const ls = await supabase.from('efundi_sync_runs')
-          .select('started_at, finished_at, status, items_new')
+          .select('started_at, finished_at, status')
           .order('started_at', { ascending: false }).limit(1).maybeSingle()
         setLastSync(ls.data || null)
       }
@@ -415,15 +413,11 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
             <div className="section-label">Student</div>
             <div className="display text-2xl" style={{ color: '#eaf4ff' }}>{name}</div>
             <div className="muted text-sm mt-1">Semester 2 · {modules.length} active module{modules.length === 1 ? '' : 's'}</div>
-            {lastSync && (
-              <div className="muted text-xs mt-1 flex items-center gap-2">
-                <span style={{ color: syncStatusColour(lastSync.status) }}>●</span>
-                <span>eFundi · synced {timeAgo(lastSync.finished_at || lastSync.started_at)}
-                  {lastSync.status === 'auth_failed' ? ' · login failed'
-                    : lastSync.status === 'error' ? ' · error'
-                    : lastSync.status === 'partial' ? ' · partial' : ''}</span>
-              </div>
-            )}
+            {/* The "eFundi · synced 3h ago" line used to sit here. Megan's ruling 2026-09-02: fold
+                the two freshness indicators into one. It said the same thing as the header line but
+                counted from the last run of ANY status, so a run that failed still read as freshly
+                synced — the exact reassurance that let six silent days pass. Its one unique piece,
+                "· partial", moved into SyncAlert above rather than being dropped. */}
           </div>
         </div>
 

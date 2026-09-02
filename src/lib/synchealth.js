@@ -49,6 +49,28 @@ function saStamp(then, now) {
 //   never — no successful run on record (an empty table, or a garbled timestamp)
 //   ok    — landed less than STALE_HOURS ago; a quiet, muted line
 //   stale — STALE_HOURS or older; the amber warning
+// The OTHER half of sync health, and deliberately a separate question: not "how long since one
+// worked?" but "did the last one FAIL?". syncHealthView cannot answer it — it only ever sees
+// last_ok, so a run that crashes five minutes from now leaves its line reading perfectly fresh.
+//
+// Staleness used to live here too (a 26h window). It moved to syncHealthView at 14h when the two
+// freshness indicators were folded into one, so this is now a plain reading of the last run's
+// status, with no clock at all.
+//
+//   auth    — CAS login refused; the NWU password almost certainly changed. Nothing is arriving.
+//   error   — the run died. Nothing, or almost nothing, arrived.
+//   partial — the run finished but some sites errored, so SOME modules are out of date. This is
+//             the quiet one, and the reason it is listed: a partial run does not count as `ok`,
+//             so it never refreshes last_ok, and before this it had no surface of its own at all.
+//   null    — nothing to say; the header line speaks for freshness.
+export function syncFailure(lastRun) {
+  if (!lastRun) return null
+  if (lastRun.status === 'auth_failed') return 'auth'
+  if (lastRun.status === 'error') return 'error'
+  if (lastRun.status === 'partial') return 'partial'
+  return null
+}
+
 export function syncHealthView(lastOkIso, now = new Date()) {
   if (!lastOkIso) return { state: 'never', label: 'eFundi has not synced yet' }
   const then = new Date(lastOkIso)
