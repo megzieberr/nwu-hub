@@ -9,6 +9,7 @@ import { pushState, enablePush, disablePush } from './lib/push'
 import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
+import SyncHealth from './SyncHealth'
 import { ping, pingMuted, setPingMuted } from './lib/ping'
 import * as pen from './lib/pen'
 
@@ -152,7 +153,10 @@ function PingToggle() {
   )
 }
 
-function Header({ children, onBack }) {
+// `sub` is a full-width line UNDER the brand row (the sync-health line uses it). It is deliberately
+// not part of the right-hand button cluster: on a 390px phone that cluster is already full at three
+// icons, and a sentence squeezed in beside them would wrap into a ribbon — the exact s18 failure.
+function Header({ children, onBack, sub }) {
   return (
     <header style={{ borderBottom: '1px solid var(--line)', background: 'rgba(5,7,15,0.55)', backdropFilter: 'blur(6px)' }}>
       <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -165,6 +169,10 @@ function Header({ children, onBack }) {
           <button onClick={signOut} className="icon-btn">⎋ Exit</button>
         </div>
       </div>
+      {/* No padding of its own: `sub` may render nothing (the sync line hides itself when its RPC
+          fails), and an empty padded strip would leave a dead gap under the brand row. The spacing
+          belongs to whatever is inside. */}
+      {sub && <div className="max-w-5xl mx-auto px-6">{sub}</div>}
     </header>
   )
 }
@@ -384,7 +392,10 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
       {/* 📅 = the classes-in-my-calendar options (s22). Owner-only: the button also self-hides
           for anyone my_ics_token() returns null for, but the guard keeps it out of a viewer's
           render pass entirely, same pattern as the Classes and Objectives sections below. */}
-      <Header><PingToggle />{!isViewer && <CalendarFeedButton />}</Header>
+      {/* The sync-health line rides under the brand row: quiet grey when eFundi is landing, an
+          amber pill once the newest successful sync is over 14h old. Owner-only, same guard as the
+          calendar button — a stuck sync is Megan's to act on, not Lize's to worry about. */}
+      <Header sub={!isViewer && <SyncHealth />}><PingToggle />{!isViewer && <CalendarFeedButton />}</Header>
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-9">
         <SyncAlert lastSync={lastSync} />
         {error && (
