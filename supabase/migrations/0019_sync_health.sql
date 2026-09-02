@@ -2,10 +2,11 @@
 -- push alerts dropped by Megan's ruling — her phone refuses notifications — so the hub
 -- itself shows a warning when the sync has gone quiet).
 --
--- efundi_sync_runs has RLS on and no client policies (the worker writes it with the
--- service role). Rather than opening the table, expose ONE security-definer function
--- returning only what the header line needs: when the last successful sync ran, when
--- the last run of any kind ran, and its status. No row access, no error text.
+-- efundi_sync_runs is written by the worker with the service role; clients reach it
+-- only through 0005's owner_all policy (the owner's own rows). Rather than widening
+-- that, expose ONE security-definer function returning only what the header line
+-- needs: when the last successful sync ran, when the last run of any kind ran, and
+-- its status. No row access, no owner ids, no error text.
 
 create or replace function public.sync_health()
 returns table (last_ok timestamptz, last_run timestamptz, last_status text)

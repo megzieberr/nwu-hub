@@ -10,3 +10,6 @@ PLAN.md
 PLAN-*.md
 PROJECT-STATUS.md
 PROJECT-HISTORY.md
+
+# Machine-local Claude session config (nested launch.json quirk)
+.claude/
