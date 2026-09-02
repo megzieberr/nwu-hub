@@ -1,15 +1,14 @@
 name: eFundi sync
 
-# Four times daily: ~08:23, 12:23, 16:23, 19:23 SAST (UTC+2) = 06:23, 10:23, 14:23, 17:23 UTC.
-# The midday runs exist for same-day class links — lecturers post the join link a few hours
-# before an evening class, and a twice-daily cadence delivered it after the class had started
-# (ENGV orientation, 2026-07-14). GitHub cron is best-effort: minute 0 is so congested that
-# by 2026-08-27/28 whole runs were being DROPPED, not just delayed (one run in two days).
-# The :23 offset keeps us off the peak minute, per GitHub's own docs. Treat all times as
-# "no earlier than". workflow_dispatch = manual "Run workflow" button, for testing.
+# The real schedule lives in Supabase pg_cron (job 'nwu-hub-sync', see supabase/cron-sync.sql):
+# four dispatches a day at 08:00, 12:00, 16:00, 19:00 SAST via workflow_dispatch, because
+# GitHub's scheduler had decayed to dropping whole runs by late Aug 2026 (one run in two days),
+# while pg_cron has never drifted. The single cron below is a safety net only — if the Supabase
+# project is paused or its token dies, one late GitHub-scheduled run a day is better than none.
+# Keep it to ONE slot: a second timer just queues behind the concurrency group and runs twice.
 on:
   schedule:
-    - cron: '23 6,10,14,17 * * *'
+    - cron: '0 5 * * *'    # 07:00 SAST — backstop; pg_cron drives the real four
   workflow_dispatch: {}
 
 # Least privilege: the worker talks to Supabase + eFundi, it does not touch the repo.
