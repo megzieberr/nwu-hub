@@ -25,7 +25,30 @@ ok('dash separator', isSameAssessment('Assignment 3 - Phonetics', 'Assignment 3'
 ok('paren separator', isSameAssessment('Assignment 5 (group)', 'Assignment 5'));
 ok('trailing whitespace ignored', isSameAssessment('Assignment 1 ', 'Assignment 1'));
 
+// The 2026-09-07 SECL121 twin: BOTH sides carry their own descriptive suffix, and hers abbreviates
+// "Assignment" to "Ass" — so neither title is a prefix of the other. Only the kind+number stem
+// sees through it.
+ok('both sides suffixed, "Ass" abbreviation (SECL121, live)',
+  isSameAssessment('Ass 1 — Video recording: speaking Setswana (50)', 'ASSIGNMENT 1 - SOUNDS VALUES OF SETSWANA'));
+ok('local title SHORTER than eFundi, same stem (MATV121 shape)',
+  isSameAssessment('Assignment 2', 'Assignment 2 - Tutorial tasks 4-6'));
+ok('test kind, both suffixed (EDCC125 shape)',
+  isSameAssessment('Test 3 · Ch 3 (open-book MCQ, opens 28 Aug)', 'Test 3 - Chapter 3 online'));
+ok('exam / examination are one kind', isSameAssessment('Exam 1 · open book', 'Examination 1'));
+
 console.log('\nisSameAssessment — must NOT adopt:');
+
+// The stem must not flatten SECL121's four assessments into each other: Ass 1 and Ass 2 are word-
+// for-word identical apart from the number.
+ok('same wording, different number', !isSameAssessment(
+  'Ass 2 — Video recording: speaking Setswana (50)', 'ASSIGNMENT 1 - SOUNDS VALUES OF SETSWANA'));
+ok('same number, different kind', !isSameAssessment('Test 1 · Trigonometry', 'Assignment 1 - Van Hiele'));
+ok('stem number must be whole ("Ass 1" ≠ "Assignment 10")',
+  !isSameAssessment('Ass 1 — Video recording', 'ASSIGNMENT 10 - LATER'));
+ok('a number that is not a kind word yields no stem',
+  !isSameAssessment('1. Introduction to Setswana', 'Assignment 1 - Sounds'));
+ok('module code in front is not a stem (MATH121 shape)',
+  !isSameAssessment('MATH 121  Assignment 1  2026 · Van Hiele', 'Test 1 - Trigonometry'));
 // The whole reason for the separator check: a prefix alone would match here.
 ok('"Assignment 1" does NOT match "Assignment 10"', !isSameAssessment('Assignment 10', 'Assignment 1'));
 ok('"Test 1" does NOT match "Test 12 · Ch 2"', !isSameAssessment('Test 12 · Ch 2', 'Test 1'));

@@ -201,15 +201,40 @@ export async function syncAnnouncements(sb, owner, moduleId, items, prev, counte
 // suffix ("Assignment 1" -> "Assignment 1 · Sociolinguistics (pair)"). Prefix, not substring, so
 // "Assignment 1" can never adopt "Assignment 10". Only rows with source IS NULL are eligible, so
 // this can never steal a row already owned by another eFundi item.
+//
+// The prefix rule alone only covers "local = eFundi title + suffix", and that assumed the eFundi
+// title is the bare stem. SECL121 broke both halves of that on 2026-09-07: eFundi opened
+// "ASSIGNMENT 1 - SOUNDS VALUES OF SETSWANA" (its own descriptive suffix) against her hand-seeded
+// "Ass 1 — Video recording: speaking Setswana (50)" (her abbreviation), so neither string is a
+// prefix of the other and the sync twinned the row. Hence the stem path below: when BOTH titles
+// open with a kind word and a number, they are the same assessment iff those agree.
+const ASSESSMENT_KINDS = {
+  assignment: 'assignment', assign: 'assignment', asg: 'assignment', ass: 'assignment',
+  test: 'test', exam: 'exam', examination: 'exam', quiz: 'quiz',
+  task: 'task', project: 'project', essay: 'essay', portfolio: 'portfolio',
+};
+
+// assessmentStem — 'assignment:1' for a nameKey that OPENS with a kind word and its number.
+// Anchored at the start and limited to the vocabulary above, so a title that merely mentions a
+// number ("MATH 121 Assignment 1 2026", "1. Intro") yields null and falls through to the prefix
+// rule. Null never matches null — no stem means no opinion, not a match.
+function assessmentStem(key) {
+  const m = /^([a-z]+)\.?\s*(\d+)(?!\d)/.exec(key);
+  const kind = m && ASSESSMENT_KINDS[m[1]];
+  return kind ? `${kind}:${m[2]}` : null;
+}
+
 // Pure decision, exported so sync/verify-assessment-adopt.mjs tests the code that actually runs.
-// True when `localTitle` is the same assessment as eFundi's `efundiTitle`: either identical, or
-// eFundi's title plus a descriptive suffix. The separator check is what stops "Assignment 1"
-// from swallowing "Assignment 10".
+// True when `localTitle` is the same assessment as eFundi's `efundiTitle`: identical, same
+// kind+number stem, or eFundi's title plus a descriptive suffix. The separator check is what
+// stops "Assignment 1" from swallowing "Assignment 10".
 export function isSameAssessment(localTitle, efundiTitle) {
   const key = nameKey(efundiTitle);
   const k = nameKey(localTitle);
   if (!key || !k) return false;
   if (k === key) return true;
+  const stem = assessmentStem(key);
+  if (stem && stem === assessmentStem(k)) return true;
   if (!k.startsWith(key)) return false;
   return /^[\s·:\-–—(,.]/.test(k.slice(key.length));
 }
