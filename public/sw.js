@@ -2,7 +2,7 @@
 // delivers PUSH REMINDERS (classes ~45 min before; tests/exams the morning of). It caches the app
 // shell so the page opens instantly and survives a flaky connection; live data still comes from
 // Supabase over the network (cross-origin requests below are left untouched).
-const CACHE = 'nwu-hub-v4'
+const CACHE = 'nwu-hub-v5'
 
 self.addEventListener('install', () => self.skipWaiting())
 

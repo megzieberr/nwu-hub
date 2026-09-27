@@ -96,6 +96,46 @@ export function gridRows(block, dayStartMin, dayEndMin) {
   }
 }
 
+// ---------- hour boxes (the Week view's grid since unit 4) ----------
+
+// A row sits in the hour box [hour:00, hour+1:00) when it starts before the box ends and ends
+// after the box starts. Strict both ways: a row ending exactly on 17:00 is NOT in the 17:00 box,
+// and one starting at 17:00 is not in the 16:00 box. Works on anything with start_time/end_time.
+export function rowInHour(row, hour) {
+  const s = timeToMin(row.start_time)
+  const e = timeToMin(row.end_time)
+  return s < (hour + 1) * 60 && e > hour * 60
+}
+
+// { [hour]: rows[] } for every hour startHour..endHour-1 (empty boxes present as []). A row that
+// covers several hours appears in each of its boxes. Inside a box, rows are in start-time order,
+// then end time, then label, then id, so the stacking never depends on fetch order.
+export function hourBoxes(rows, startHour, endHour) {
+  const out = {}
+  for (let h = startHour; h < endHour; h++) out[h] = []
+  const sorted = (rows || []).slice().sort((a, b) =>
+    timeToMin(a.start_time) - timeToMin(b.start_time) ||
+    timeToMin(a.end_time) - timeToMin(b.end_time) ||
+    String(a.label || '').localeCompare(String(b.label || '')) ||
+    String(a.id || '').localeCompare(String(b.id || '')))
+  for (const r of sorted) {
+    for (let h = startHour; h < endHour; h++) if (rowInHour(r, h)) out[h].push(r)
+  }
+  return out
+}
+
+// True when a row starts and ends on the hour (the editor makes only these; locked classes such
+// as 16:15 to 17:00 are not, and print their real time inside the box).
+export function isWholeHours(row) {
+  return timeToMin(row.start_time) % 60 === 0 && timeToMin(row.end_time) % 60 === 0
+}
+
+// A hard deadline: a locked row copied from the scheduler whose key marks it as her OWN fixed
+// appointment (a test, an exam), not a class she teaches. Drawn in the "fixed" style.
+export function isHardDeadline(row) {
+  return !!row && row.source === 'whenworks' && String(row.source_key || '').startsWith('ww:own:')
+}
+
 // Free gaps for ONE day's blocks (they may overlap each other), inside the visible hours, in time
 // order. Gaps under 15 minutes are left out — too short to offer as a "+ free" slot.
 export function freeGaps(blocks, dayStartMin, dayEndMin) {

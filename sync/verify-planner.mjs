@@ -5,6 +5,7 @@ import {
   localDateStr, parseLocalDate, addDays, mondayOf, weekDates,
   timeToMin, minToTime, snap15, overlaps, gridRows, freeGaps,
   dueByDay, expandRepeat, swapBlocks, copyWeek, classMarkersForWeek,
+  rowInHour, hourBoxes, isWholeHours, isHardDeadline,
 } from '../src/lib/planner.js'
 
 let pass = 0
@@ -63,6 +64,36 @@ check('gridRows: clamped at the top of the visible range', gridRows({ start_time
 check('gridRows: clamped at the bottom of the visible range', gridRows({ start_time: '21:30', end_time: '23:00' }, dayStart, dayEnd), { rowStart: 47, rowEnd: 49 })
 check('gridRows: fully outside the visible hours gives null', gridRows({ start_time: '07:00', end_time: '08:00' }, dayStart, dayEnd), null)
 check('gridRows: touching the top edge exactly gives null', gridRows({ start_time: '09:00', end_time: '10:00' }, dayStart, dayEnd), null)
+
+// ---- hour boxes: which rows sit in which hour box ----
+const odd = { id: 'r1', label: 'locked class', start_time: '16:15:00', end_time: '17:00:00' }
+const twoHour = { id: 'r2', label: 'block A', start_time: '10:00', end_time: '12:00' }
+const oneHour = { id: 'r3', label: 'block B', start_time: '14:00', end_time: '15:00' }
+const halfPast = { id: 'r4', label: 'block C', start_time: '14:30', end_time: '15:30' }
+check('rowInHour: 16:15-17:00 sits in the 16:00 box', rowInHour(odd, 16), true)
+check('rowInHour: 16:15-17:00 is NOT in the 17:00 box (ends exactly on the hour)', rowInHour(odd, 17), false)
+check('rowInHour: 16:15-17:00 is NOT in the 15:00 box', rowInHour(odd, 15), false)
+check('rowInHour: a row starting at 17:00 is NOT in the 16:00 box', rowInHour({ start_time: '17:00', end_time: '18:00' }, 16), false)
+check('rowInHour: 24:00 end sits in the 23:00 box', rowInHour({ start_time: '23:00', end_time: '24:00' }, 23), true)
+const boxes = hourBoxes([halfPast, odd, twoHour, oneHour], 6, 22)
+check('hourBoxes: 16 boxes for 06:00 to 22:00', Object.keys(boxes).length, 16)
+check('hourBoxes: empty box is an empty list', boxes[6], [])
+check('hourBoxes: a 2-hour block fills both of its boxes', [boxes[10].map((r) => r.id), boxes[11].map((r) => r.id)], [['r2'], ['r2']])
+check('hourBoxes: a block ending exactly on 12:00 is not in the 12:00 box', boxes[12], [])
+check('hourBoxes: two rows in one box, both kept, in start order', boxes[14].map((r) => r.id), ['r3', 'r4'])
+check('hourBoxes: the half-past row also sits in the next box', boxes[15].map((r) => r.id), ['r4'])
+check('hourBoxes: 16:15-17:00 in the 16:00 box only', [boxes[16].map((r) => r.id), boxes[17]], [['r1'], []])
+check('hourBoxes: rows outside the visible hours are left out', hourBoxes([{ id: 'x', start_time: '05:00', end_time: '06:00' }], 6, 22)[6], [])
+check('hourBoxes: same start, shorter first, then label', hourBoxes([
+  { id: 'b', label: 'Z', start_time: '09:00', end_time: '10:00' },
+  { id: 'a', label: 'A', start_time: '09:00', end_time: '10:00' },
+  { id: 'c', label: 'M', start_time: '09:00', end_time: '09:30' },
+], 9, 10)[9].map((r) => r.id), ['c', 'a', 'b'])
+check('isWholeHours: 10:00-12:00', isWholeHours(twoHour), true)
+check('isWholeHours: 16:15-17:00', isWholeHours(odd), false)
+check('isHardDeadline: ww:own: row', isHardDeadline({ source: 'whenworks', source_key: 'ww:own:2026-10-01:t1' }), true)
+check('isHardDeadline: a class row from the scheduler is not', isHardDeadline({ source: 'whenworks', source_key: 'ww:x:2026-10-01' }), false)
+check('isHardDeadline: her own block is not', isHardDeadline({ source: null, source_key: null }), false)
 
 // ---- freeGaps ----
 check('freeGaps: empty day gives one gap for the whole visible range', freeGaps([], dayStart, dayEnd), [{ start: 600, end: 1320 }])

@@ -1,20 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ping } from './lib/ping'
 import { formatDue } from './lib/week'
 import {
-  localDateStr, parseLocalDate, addDays, mondayOf, weekDates, timeToMin, minToTime,
-  gridRows, freeGaps, dueByDay, expandRepeat, swapBlocks, copyWeek, classMarkersForWeek,
+  localDateStr, parseLocalDate, addDays, mondayOf, weekDates, minToTime, timeToMin,
+  expandRepeat, swapBlocks, copyWeek, classMarkersForWeek, hourBoxes, isWholeHours, isHardDeadline,
 } from './lib/planner.js'
 
-// The Week tab (sunday-planner/PLAN-week-tab.md, unit 2b): her study blocks for one Monday..Sunday,
-// on the hub's own look. Three faces of ONE component:
-//   • wide screen  — a Monday..Sunday grid in 15-minute rows;
-//   • phone (<760) — one day at a time: day tabs, swipe, a time-ordered list with tappable gaps;
-//   • wallpaper    — the grid and deadline strip only, centred for a 1920x1080 screenshot.
+// The Week tab (sunday-planner/PLAN-week-tab.md, unit 4): her week as an hour-box grid, the same
+// look as the study planner, saving to plan_blocks exactly as before. Three faces of ONE component:
+//   • wide screen  : TIME | MON .. SUN, one box per hour per day;
+//   • phone (<760) : one day at a time, day tabs plus swipe, the same hour boxes top to bottom;
+//   • wallpaper    : the grid only, for a 1920x1080 screenshot.
 //
-// All date/time/gap/repeat/swap/copy decisions come from lib/planner.js (tested there). All reads
-// and writes go through the `data` prop (lib/plannerData.js): the live Supabase layer, or the
-// in-memory demo layer on the dev-only #week-demo route. This file never imports the client.
+// Which rows sit in which box, and every date/repeat/swap/copy decision, comes from lib/planner.js
+// (tested there). All reads and writes go through the `data` prop (lib/plannerData.js): the live
+// Supabase layer, or the in-memory demo layer on the dev-only #week-demo route.
 
 const HOURS_KEY = 'nwuHub.week.hours'
 const CACHE_PREFIX = 'nwuHub.week.cache.'
@@ -31,27 +31,37 @@ const KIND_CHIPS = [
 ]
 const KIND_NAME = { study: 'Study', class: 'Class', prep: 'Prep', break: 'Break', other: 'Other' }
 const STUDY_COLOUR = 'var(--cyan)'
-// Rows copied in from the tutoring scheduler (source set): one "classes" colour, locked.
-const LOCKED_COLOUR = 'var(--purple)'
-const ROW_PX = 12            // one 15-minute row on the normal wide grid (an hour = 48px)
-const REPEAT_WEEKS = 6       // default "repeat every week until": 6 weeks ahead
+const LOCKED_COLOUR = 'var(--purple)'   // classes copied in from the tutoring scheduler
+const FIXED_COLOUR = 'var(--red)'       // hard deadlines (ww:own: rows)
+const REPEAT_WEEKS = 6                  // default "repeat every week until": 6 weeks ahead
 const REPEAT_CAP = 26
+const MAX_LENGTH_H = 8
 
 // ---------- small helpers (formatting only; the logic lives in planner.js) ----------
 
+const pad = (n) => String(n).padStart(2, '0')
 const hm = (t) => String(t || '').slice(0, 5)
+const hourLabel = (h) => `${pad(h)}:00 - ${pad(h + 1 === 24 ? 0 : h + 1)}:00`
+const timeRange = (b) => `${hm(b.start_time)} - ${hm(b.end_time)}`
 
 function rangeLabel(dates) {
   const a = parseLocalDate(dates[0])
   const b = parseLocalDate(dates[6])
-  return `${a.getDate()} ${MONTHS[a.getMonth()]} – ${b.getDate()} ${MONTHS[b.getMonth()]}`
+  return `${a.getDate()} ${MONTHS[a.getMonth()]} - ${b.getDate()} ${MONTHS[b.getMonth()]}`
+}
+
+function dayLabel(date, dates) {
+  const i = dates ? dates.indexOf(date) : -1
+  const d = parseLocalDate(date)
+  const name = i >= 0 ? DAY_LONG[i] : DAY_LONG[(d.getDay() + 6) % 7]
+  return `${name} ${d.getDate()} ${MONTHS[d.getMonth()]}`
 }
 
 function lengthLabel(min) {
+  if (min % 60 === 0) return min === 60 ? '1 hour' : `${min / 60} hours`
   const h = Math.floor(min / 60)
   const m = min % 60
-  if (!h) return `${m} min`
-  return m ? `${h} h ${m} min` : `${h} h`
+  return h ? `${h} h ${m} min` : `${m} min`
 }
 
 function savedAtLabel(iso) {
@@ -65,7 +75,7 @@ function readHours() {
     const v = JSON.parse(localStorage.getItem(HOURS_KEY) || 'null')
     if (v && Number.isInteger(v.start) && Number.isInteger(v.end) && v.start >= 6 && v.end <= 24 && v.end > v.start) return v
   } catch { /* fall through to the default */ }
-  return { start: 10, end: 22 }
+  return { start: 6, end: 22 }
 }
 
 function writeHours(v) {
@@ -105,8 +115,26 @@ function useIsPhone() {
   return m
 }
 
+// The current hour, refreshed every minute, for the "now" outline.
+function useNowHour() {
+  const [h, setH] = useState(() => new Date().getHours())
+  useEffect(() => {
+    const t = setInterval(() => setH(new Date().getHours()), 60 * 1000)
+    return () => clearInterval(t)
+  }, [])
+  return h
+}
+
+// 'own' (hers, editable), 'locked' (a class from the scheduler), 'fixed' (a hard deadline).
+function rowType(b) {
+  if (b.source == null) return 'own'
+  return isHardDeadline(b) ? 'fixed' : 'locked'
+}
+
 function blockColour(b, modById) {
-  if (b.source) return LOCKED_COLOUR
+  const t = rowType(b)
+  if (t === 'fixed') return FIXED_COLOUR
+  if (t === 'locked') return LOCKED_COLOUR
   const m = b.module_id && modById[b.module_id]
   if (m && m.colour) return m.colour
   const k = KIND_CHIPS.find((x) => x.kind === b.kind)
@@ -117,51 +145,31 @@ function blockTitle(b, modById) {
   return b.label || (b.module_id && modById[b.module_id]?.code) || KIND_NAME[b.kind] || 'Study'
 }
 
-// Side-by-side lanes for overlapping items in one day column (overlaps are allowed on purpose).
-// Layout only: which items overlap is plain interval maths on the minutes planner.js already gave.
-function withLanes(items) {
-  const sorted = items.slice().sort((a, b) => a.s - b.s || b.e - a.e)
-  const out = []
-  let cluster = []
-  let laneEnds = []
-  let clusterEnd = -1
-  const flush = () => {
-    for (const it of cluster) it.lanes = laneEnds.length
-    cluster = []
-    laneEnds = []
-    clusterEnd = -1
-  }
-  for (const it of sorted) {
-    if (cluster.length && it.s >= clusterEnd) flush()
-    let lane = laneEnds.findIndex((end) => end <= it.s)
-    if (lane < 0) { lane = laneEnds.length; laneEnds.push(it.e) } else laneEnds[lane] = it.e
-    const p = { ...it, lane }
-    cluster.push(p)
-    out.push(p)
-    clusterEnd = Math.max(clusterEnd, it.e)
-  }
-  flush()
-  return out
+// "MATH101" or "Prep" or "Study": the module or kind line in the detail panel.
+function subjectLine(b, modById) {
+  const m = b.module_id && modById[b.module_id]
+  if (m) return m.title && m.title !== m.code ? `${m.code}, ${m.title}` : m.code
+  return KIND_NAME[b.kind] || 'Study'
 }
-
-// A timed NWU class marker as a block-shaped object, so gridRows/freeGaps can take it as-is.
-const markerAsBlock = (m) => ({ block_date: m.date, start_time: minToTime(m.start), end_time: minToTime(m.end) })
 
 // =================================================================================================
 
 export default function WeekPlanner({ data: db, cacheId = null, wall = false, onOpenWall, onExitWall }) {
   const today = useMemo(() => localDateStr(new Date()), [])
+  const nowH = useNowHour()
   const [monday, setMonday] = useState(() => mondayOf(today))
   const dates = useMemo(() => weekDates(monday), [monday])
   const [selDay, setSelDay] = useState(() => Math.max(0, weekDates(mondayOf(today)).indexOf(today)))
   const [hours, setHours] = useState(readHours)
-  const [week, setWeek] = useState(null)             // { blocks, goals, assessments, modules }
+  const [week, setWeek] = useState(null)             // { blocks, goals, modules }
   const [status, setStatus] = useState('loading')    // loading | ok | offline
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [editor, setEditor] = useState(null)         // { block|null, date, start, length }
+  // The panel: { mode: 'view' | 'edit' | 'locked', block|null, date, start, length }
+  const [sheet, setSheet] = useState(null)
   const [pick, setPick] = useState(null)             // the block waiting for its swap partner
+  const [hot, setHot] = useState(null)               // 'date|hour' of the box last tapped
   const [busy, setBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const phoneWidth = useIsPhone()
@@ -202,7 +210,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     return () => window.removeEventListener('online', again)
   }, [monday, load])
 
-  // Keep the saved copy in step with local changes (a tick, a move) once the week is live.
+  // Keep the saved copy in step with local changes (a tick) once the week is live.
   useEffect(() => {
     if (status === 'ok' && week && cacheId) saveCache(cacheId, monday, week)
   }, [week]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -228,11 +236,36 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   const markers = useMemo(
     () => classMarkersForWeek(week?.goals || [], dates).filter((m) => m.date),
     [week, dates])
-  const due = useMemo(() => dueByDay(week?.assessments || [], dates), [week, dates])
-  const startMin = hours.start * 60
-  const endMin = hours.end * 60
   const readOnly = status !== 'ok'
   const thisMonday = mondayOf(today)
+
+  // Every day's rows (her blocks, locked rows, timed NWU class markers) sorted into hour boxes.
+  const boxesByDate = useMemo(() => {
+    const out = {}
+    for (const d of dates) {
+      const rows = [
+        ...blocks.filter((b) => b.block_date === d).map((b) => ({
+          key: b.id, id: b.id, type: rowType(b), b, label: blockTitle(b, modById), colour: blockColour(b, modById),
+          start_time: b.start_time, end_time: b.end_time,
+        })),
+        ...markers.filter((m) => m.date === d && !m.untimed).map((m) => ({
+          key: `nwu-${m.goal.id}`, id: `nwu-${m.goal.id}`, type: 'nwu', m, label: m.goal.text,
+          start_time: minToTime(m.start), end_time: minToTime(m.end),
+        })),
+      ]
+      out[d] = hourBoxes(rows, hours.start, hours.end)
+    }
+    return out
+  }, [blocks, markers, dates, hours, modById])
+
+  const untimedByDate = useMemo(() => {
+    const out = {}
+    for (const d of dates) out[d] = markers.filter((m) => m.date === d && m.untimed)
+    return out
+  }, [markers, dates])
+
+  // The panel always shows the live copy of its block (so a tick shows at once).
+  const liveBlock = sheet?.block ? (blocks.find((x) => x.id === sheet.block.id) || sheet.block) : null
 
   function changeHours(next) {
     setHours(next)
@@ -258,31 +291,31 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     setWeek((w) => (w ? { ...w, blocks: w.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)) } : w))
   }
 
-  function dayItems(date) {
-    return [
-      ...blocks.filter((b) => b.block_date === date),
-      ...markers.filter((m) => m.date === date && !m.untimed).map(markerAsBlock),
-    ]
+  function closeSheet() {
+    setSheet(null)
+    setHot(null)
   }
 
-  // New block: at the tapped time, an hour long, or less if the free gap is shorter.
-  function openNew(date, start, gapEnd) {
-    if (readOnly || pick) return
-    let end = gapEnd
-    if (end == null) {
-      const g = freeGaps(dayItems(date), startMin, endMin).find((x) => start >= x.start && start < x.end)
-      end = g ? g.end : start + 60
-    }
-    const length = Math.max(15, Math.min(60, end - start, 24 * 60 - start))
+  // Tap an empty hour box: a new block on that day and hour, one hour long.
+  function openNew(date, hour) {
+    if (readOnly || busy || pick) return
     setError('')
-    setEditor({ block: null, date, start, length })
+    setSheet({ mode: 'edit', block: null, date, start: hour * 60, length: 60 })
+  }
+
+  // Tap a block: see what it entails. In swap mode, the tap picks the partner instead.
+  function openItem(b) {
+    if (pick) { choosePartner(b); return }
+    setError('')
+    setSheet({ mode: b.source ? 'locked' : 'view', block: b })
   }
 
   function openEdit(b) {
     if (readOnly || b.source) return
-    if (pick) { choosePartner(b); return }
-    setError('')
-    setEditor({ block: b, date: b.block_date, start: timeToMin(b.start_time), length: timeToMin(b.end_time) - timeToMin(b.start_time) })
+    setSheet({
+      mode: 'edit', block: b, date: b.block_date,
+      start: timeToMin(b.start_time), length: timeToMin(b.end_time) - timeToMin(b.start_time),
+    })
   }
 
   // ---------- writes ----------
@@ -303,7 +336,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   }
 
   async function saveDraft(d, scope) {
-    const orig = editor?.block || null
+    const orig = sheet?.block || null
     const fields = {
       block_date: d.date,
       start_time: minToTime(d.start),
@@ -341,7 +374,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
             (skipped > 0 ? `, skipped ${skipped} where that time was already taken.` : '.')
         }
       }
-      setEditor(null)
+      closeSheet()
       if (message) setNotice(message)
       // On a phone, follow a block that moved to another day, so she sees where it went.
       const i = dates.indexOf(d.date)
@@ -354,7 +387,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   }
 
   async function deleteBlock(scope) {
-    const orig = editor?.block
+    const orig = sheet?.block
     if (!orig) return
     setBusy(true)
     setError('')
@@ -363,7 +396,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
         ? (await db.fetchSeries(orig.series_id, orig.block_date)).map((r) => r.id)
         : [orig.id]
       await db.remove(ids)
-      setEditor(null)
+      closeSheet()
       if (ids.length > 1) setNotice(`Deleted ${ids.length} blocks.`)
     } catch (e) {
       setError(`Could not delete that: ${e.message}`)
@@ -373,7 +406,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   }
 
   function startSwap(b) {
-    setEditor(null)
+    closeSheet()
     setPick(b)
   }
 
@@ -387,6 +420,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     setBusy(true)
     setError('')
     setPick(null)
+    setHot(null)
     try {
       await db.update(a.id, slot(a2))
       try {
@@ -443,8 +477,8 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   // ---------- render ----------
 
   const gridProps = {
-    dates, today, blocks, markers, due, hours, modById, readOnly: readOnly || busy, pick,
-    onEdit: openEdit, onTick: toggleDone, onAdd: openNew,
+    dates, today, nowH, hours, boxesByDate, untimedByDate, readOnly: readOnly || busy, pick, hot,
+    onItem: openItem, onAdd: openNew, onHot: setHot,
   }
 
   if (wall) {
@@ -487,7 +521,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
       {pick && (
         <div className="panel p-3 flex items-center gap-3 wk-pickbar" style={{ borderColor: 'var(--cyan)' }}>
           <span className="text-sm" style={{ flex: '1 1 0', minWidth: 0 }}>
-            Tap the block to swap with <b>{blockTitle(pick, modById)}</b> ({hm(pick.start_time)}–{hm(pick.end_time)}).
+            Tap the block to swap with <b>{blockTitle(pick, modById)}</b> ({timeRange(pick)}).
           </span>
           <button className="btn small ghost" onClick={() => setPick(null)}>Cancel</button>
         </div>
@@ -496,7 +530,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
       {status === 'loading' && !week && <p className="muted text-sm">Loading…</p>}
 
       {week && (isPhone
-        ? <DayView {...gridProps} dayIdx={selDay} setDayIdx={setSelDay} onSwipe={stepDay} />
+        ? <DayView {...gridProps} blocks={blocks} dayIdx={selDay} setDayIdx={setSelDay} onSwipe={stepDay} />
         : (
           <div className="wk-wrap">
             <div className="wk-side" aria-hidden="true">{rangeLabel(dates)}</div>
@@ -523,13 +557,24 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
         </div>
       )}
 
-      {editor && (
+      {sheet && sheet.mode === 'edit' && (
         <BlockEditor
-          key={editor.block?.id || 'new'}
-          init={editor} dates={dates} modules={chipModules} busy={busy}
-          onSave={saveDraft} onDelete={deleteBlock} onSwap={startSwap}
-          onClose={() => setEditor(null)}
+          key={`edit-${sheet.block?.id || 'new'}`}
+          init={sheet} dates={dates} modules={chipModules} busy={busy}
+          onSave={saveDraft}
+          onCancel={() => (sheet.block ? setSheet({ mode: 'view', block: sheet.block }) : closeSheet())}
+          onClose={closeSheet}
         />
+      )}
+      {sheet && sheet.mode === 'view' && liveBlock && (
+        <BlockView
+          key={`view-${liveBlock.id}`}
+          block={liveBlock} dates={dates} modById={modById} busy={busy} readOnly={readOnly}
+          onTick={toggleDone} onEdit={openEdit} onDelete={deleteBlock} onSwap={startSwap} onClose={closeSheet}
+        />
+      )}
+      {sheet && sheet.mode === 'locked' && liveBlock && (
+        <LockedView block={liveBlock} dates={dates} modById={modById} onClose={closeSheet} />
       )}
     </main>
   )
@@ -542,7 +587,7 @@ function HoursPicker({ hours, onChange }) {
   for (let h = 6; h <= 23; h++) starts.push(h)
   const ends = []
   for (let h = 7; h <= 24; h++) ends.push(h)
-  const lbl = (h) => `${String(h).padStart(2, '0')}:00`
+  const lbl = (h) => `${pad(h)}:00`
   return (
     <span className="wk-hours text-sm muted">
       Show
@@ -565,162 +610,118 @@ function HoursPicker({ hours, onChange }) {
   )
 }
 
-// ---------- deadline chips ----------
+// ---------- one hour box (all three faces) ----------
 
-function DueChips({ items, max }) {
-  const shown = max ? items.slice(0, max) : items
-  const rest = items.length - shown.length
+// Everything in the box is shown, stacked; nothing is ever folded away. Her blocks, locked
+// classes and hard deadlines are each their own tap target. NWU class markers are thin read-only
+// tags; a box holding only those (or nothing) is itself the tap target for a new block.
+function HourBox({ date, dayIdx, h, items, isNow, hot, readOnly, pick, wall, onItem, onAdd, onHot }) {
+  const rows = items.filter((it) => it.type !== 'nwu')
+  const addable = !wall && !readOnly && !pick && rows.length === 0
+  const key = `${date}|${h}`
+  const cls = ['slot']
+  if (!items.length) cls.push('empty')
+  if (isNow && !wall) cls.push('now')
+  if (hot === key && !wall) cls.push('hot')
+  const d = parseLocalDate(date)
   return (
+    <div className={cls.join(' ')} data-date={date} data-hour={h}
+      role={addable ? 'button' : undefined} tabIndex={addable ? 0 : undefined}
+      aria-label={addable ? `${DAY_LONG[dayIdx]} ${d.getDate()}, ${hourLabel(h)}: add a block` : undefined}
+      onPointerDown={wall ? undefined : () => onHot(key)}
+      onClick={addable ? () => onAdd(date, h) : undefined}
+      onKeyDown={addable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(date, h) } } : undefined}>
+      {items.map((it) => (
+        it.type === 'nwu'
+          ? (
+            <span key={it.key} className="slot-nwu" data-nwu-class="" style={{ '--c': it.m.goal.modules?.colour || 'var(--cyan)' }}
+              title={`NWU class, ${timeRange(it)}`}>
+              {it.label}{!isWholeHours(it) && <small> {timeRange(it)}</small>}
+            </span>
+          )
+          : <BoxItem key={it.key} it={it} wall={wall} pick={pick} onItem={onItem} />
+      ))}
+      {addable && <span className={`slot-plus${items.length ? ' side' : ''}`} aria-hidden="true">+</span>}
+    </div>
+  )
+}
+
+function BoxItem({ it, wall, pick, onItem }) {
+  const b = it.b
+  const cls = ['slot-item', it.type]
+  if (it.type === 'own' && b.done) cls.push('done')
+  if (pick && pick.id === b.id) cls.push('picking')
+  const odd = !isWholeHours(b)
+  const inner = (
     <>
-      {shown.map((a) => {
-        const c = a.modules?.colour || 'var(--cyan)'
-        const upcoming = !a.status || a.status === 'upcoming'
-        const doneMark = a.status === 'submitted' || a.status === 'graded'
-        return (
-          <span key={a.id} className={`wk-due${upcoming ? '' : ' done'}`} style={{ '--c': c }}
-            title={`${a.modules?.code || ''} ${a.title} · due ${formatDue(a.due_date)}`}>
-            {doneMark ? '✓ ' : ''}{a.modules?.code ? `${a.modules.code} ` : ''}{a.title}
-          </span>
-        )
-      })}
-      {rest > 0 && (
-        <span className="wk-more" title={items.slice(shown.length).map((a) => `${a.modules?.code || ''} ${a.title}`).join('\n')}>
-          + {rest} more
-        </span>
-      )}
+      {it.type === 'fixed' && <span className="slot-tag">FIXED</span>}
+      <span className="slot-l">{it.type === 'locked' && <span className="wk-lock" aria-hidden="true">🔒</span>}{it.label}</span>
+      {odd && <small className="slot-t">{timeRange(b)}</small>}
     </>
+  )
+  const style = { '--c': it.colour }
+  if (wall) return <div className={cls.join(' ')} style={style}>{inner}</div>
+  const what = it.type === 'fixed' ? 'Fixed deadline' : it.type === 'locked' ? 'Class, locked' : pick ? 'Swap with' : 'Open'
+  return (
+    <button type="button" className={cls.join(' ')} style={style}
+      data-block-id={b.id} data-kind={it.type}
+      disabled={!!pick && (it.type !== 'own' || pick.id === b.id)}
+      aria-label={`${what}: ${it.label}, ${timeRange(b)}${b.done ? ', done' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onItem(b) }}>
+      {inner}
+    </button>
   )
 }
 
 // ---------- wide grid (and the wallpaper) ----------
 
-function WeekGrid({ dates, today, blocks, markers, due, hours, modById, readOnly, pick, onEdit, onTick, onAdd, wall = false }) {
-  const startMin = hours.start * 60
-  const endMin = hours.end * 60
-  const nRows = (endMin - startMin) / 15
-  const nHours = hours.end - hours.start
-  const untimed = markers.filter((m) => m.untimed)
-  const rowsTpl = `repeat(${nRows}, minmax(0, 1fr))`
-  const bodyRow = wall ? 'minmax(0, 1fr)' : `${nRows * ROW_PX}px`
-  const lineBg = { backgroundSize: `100% ${100 / nHours}%` }
-
+function WeekGrid({ dates, today, nowH, hours, boxesByDate, untimedByDate, readOnly, pick, hot, onItem, onAdd, onHot, wall = false }) {
+  const hourList = []
+  for (let h = hours.start; h < hours.end; h++) hourList.push(h)
+  const anyUntimed = dates.some((d) => untimedByDate[d].length)
+  const rowTpl = wall ? 'minmax(0, 1fr)' : 'minmax(38px, auto)'
   return (
     <div className="wk-grid" data-week-grid=""
-      style={{ gridTemplateRows: `auto auto${untimed.length ? ' auto' : ''} ${bodyRow}` }}>
-      <div className="wk-rl" />
+      style={{ gridTemplateRows: `auto${anyUntimed ? ' auto' : ''} repeat(${hourList.length}, ${rowTpl})` }}>
+      <div className="wk-gh">TIME</div>
       {dates.map((d, i) => (
-        <div key={d} className={`wk-dh${!wall && d === today ? ' today' : ''}`}>
-          {DAY_SHORT[i]} <small>{parseLocalDate(d).getDate()}</small>
+        <div key={d} className={`wk-gh${!wall && d === today ? ' today' : ''}`} data-day-head={d}>
+          {DAY_SHORT[i].toUpperCase()} <small>{parseLocalDate(d).getDate()}</small>
         </div>
       ))}
 
-      <div className="wk-rl">Due</div>
-      {dates.map((d) => (
-        <div key={d} className="wk-cell" data-due-date={d}><DueChips items={due[d] || []} max={2} /></div>
-      ))}
-
-      {untimed.length > 0 && <div className="wk-rl">Class</div>}
-      {untimed.length > 0 && dates.map((d) => (
-        <div key={d} className="wk-cell">
-          {untimed.filter((m) => m.date === d).map((m) => (
-            <span key={m.goal.id} className="wk-due wk-nwu-chip" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}
+      {anyUntimed && <div className="wk-gt slim">No time set</div>}
+      {anyUntimed && dates.map((d) => (
+        <div key={d} className="slot-notime" data-notime={d}>
+          {untimedByDate[d].map((m) => (
+            <span key={m.goal.id} className="slot-nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}
               title="NWU class, no time set">{m.goal.text}</span>
           ))}
         </div>
       ))}
 
-      <div className="wk-times" style={{ gridTemplateRows: rowsTpl }} aria-hidden="true">
-        {Array.from({ length: nHours }, (_, i) => (
-          <span key={i} style={{ gridRow: `${1 + i * 4} / span 4` }}>{minToTime(startMin + i * 60)}</span>
-        ))}
-      </div>
-
-      {dates.map((d) => {
-        const items = withLanes([
-          ...blocks.filter((b) => b.block_date === d)
-            .map((b) => ({ key: b.id, b, s: timeToMin(b.start_time), e: timeToMin(b.end_time) })),
-          ...markers.filter((m) => m.date === d && !m.untimed)
-            .map((m) => ({ key: `nwu-${m.goal.id}`, m, s: m.start, e: m.end })),
-        ])
-        const onBg = (e) => {
-          if (wall || readOnly || e.target !== e.currentTarget) return
-          const r = e.currentTarget.getBoundingClientRect()
-          const row = Math.min(nRows - 1, Math.max(0, Math.floor((e.clientY - r.top) / (r.height / nRows))))
-          onAdd(d, startMin + row * 15)
-        }
-        return (
-          <div key={d} className={`wk-col${!wall && d === today ? ' today' : ''}`} data-date={d}
-            style={{ gridTemplateRows: rowsTpl, ...lineBg }} onClick={onBg}
-            title={wall || readOnly ? undefined : 'Tap an empty spot to add a block'}>
-            {items.map((it) => {
-              const place = gridRows(it.b || markerAsBlock(it.m), startMin, endMin)
-              if (!place) return null
-              const style = {
-                gridRow: `${place.rowStart} / ${place.rowEnd}`,
-                width: `calc(${100 / it.lanes}% - 2px)`,
-                marginLeft: `${(100 * it.lane) / it.lanes}%`,
-              }
-              if (it.m) {
-                return (
-                  <div key={it.key} className="wk-b nwu" data-nwu-class=""
-                    style={{ ...style, '--c': it.m.goal.modules?.colour || 'var(--cyan)' }}
-                    title={`NWU class · ${minToTime(it.m.start)}`}>
-                    <span className="l">{it.m.goal.text}</span>
-                    <span className="t">{minToTime(it.m.start)}</span>
-                  </div>
-                )
-              }
-              const b = it.b
-              const locked = !!b.source
-              const title = blockTitle(b, modById)
-              const cls = ['wk-b']
-              if (b.done) cls.push('done')
-              if (locked) cls.push('locked')
-              if (pick && pick.id === b.id) cls.push('picking')
-              const interactive = !wall && !readOnly && !locked
-              return (
-                <div key={it.key} className={cls.join(' ')} data-block-id={b.id} data-locked={locked ? '1' : undefined}
-                  style={{ ...style, '--c': blockColour(b, modById) }}
-                  role={interactive ? 'button' : undefined} tabIndex={interactive ? 0 : undefined}
-                  onClick={interactive ? () => onEdit(b) : undefined}
-                  onKeyDown={interactive ? (e) => { if (e.key === 'Enter') onEdit(b) } : undefined}
-                  title={`${title} · ${hm(b.start_time)}–${hm(b.end_time)}${locked ? ' · from the tutoring timetable, locked' : ''}`}>
-                  <span className="l">{locked && <span className="wk-lock" aria-label="Locked">🔒</span>}{title}</span>
-                  <span className="t">{hm(b.start_time)}–{hm(b.end_time)}</span>
-                  {!wall && !locked && (
-                    <button className="wk-b-tick" disabled={readOnly}
-                      aria-label={b.done ? `Mark not done: ${title}` : `Mark done: ${title}`}
-                      onClick={(e) => { e.stopPropagation(); onTick(b) }}>✓</button>
-                  )}
-                  {wall && b.done && <span className="wk-b-done" aria-label="Done">✓</span>}
-                </div>
-              )
-            })}
-          </div>
-        )
-      })}
+      {hourList.map((h) => (
+        <Fragment key={h}>
+          <div className="wk-gt">{hourLabel(h)}</div>
+          {dates.map((d, i) => (
+            <HourBox key={d} date={d} dayIdx={i} h={h} items={boxesByDate[d][h] || []}
+              isNow={d === today && h === nowH} hot={hot} readOnly={readOnly} pick={pick} wall={wall}
+              onItem={onItem} onAdd={onAdd} onHot={onHot} />
+          ))}
+        </Fragment>
+      ))}
     </div>
   )
 }
 
 // ---------- phone: one day at a time ----------
 
-function DayView({ dates, today, blocks, markers, due, hours, modById, readOnly, pick, onEdit, onTick, onAdd, dayIdx, setDayIdx, onSwipe }) {
+function DayView({ dates, today, nowH, hours, boxesByDate, untimedByDate, blocks, readOnly, pick, hot, onItem, onAdd, onHot, dayIdx, setDayIdx, onSwipe }) {
   const date = dates[dayIdx]
-  const startMin = hours.start * 60
-  const endMin = hours.end * 60
-  const dayBlocks = blocks.filter((b) => b.block_date === date)
-  const dayMarkers = markers.filter((m) => m.date === date)
-  const timed = dayMarkers.filter((m) => !m.untimed)
-  const untimed = dayMarkers.filter((m) => m.untimed)
-  const gaps = readOnly || pick ? [] : freeGaps([...dayBlocks, ...timed.map(markerAsBlock)], startMin, endMin)
   const d = parseLocalDate(date)
-
-  const rows = [
-    ...dayBlocks.map((b) => ({ type: 'block', s: timeToMin(b.start_time), b })),
-    ...timed.map((m) => ({ type: 'nwu', s: m.start, m })),
-    ...gaps.map((g) => ({ type: 'gap', s: g.start, g })),
-  ].sort((x, y) => x.s - y.s || (x.type === 'gap') - (y.type === 'gap'))
+  const untimed = untimedByDate[date] || []
+  const hourList = []
+  for (let h = hours.start; h < hours.end; h++) hourList.push(h)
 
   const touch = useRef(null)
   const onTouchStart = (e) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }
@@ -743,88 +744,140 @@ function DayView({ dates, today, blocks, markers, due, hours, modById, readOnly,
           return (
             <button key={x} className={cls.join(' ')} role="tab" aria-selected={i === dayIdx}
               aria-label={`${DAY_LONG[i]} ${parseLocalDate(x).getDate()}`} onClick={() => setDayIdx(i)}>
-              <b>{DAY_SHORT[i]}</b><span>{parseLocalDate(x).getDate()}</span>
+              <b>{DAY_SHORT[i].toUpperCase()}</b><span>{parseLocalDate(x).getDate()}</span>
             </button>
           )
         })}
       </div>
 
-      {(due[date] || []).length > 0 && (
-        <div className="wk-duebar" data-due-date={date}>
-          <span className="section-label">Due {formatDue(date)}</span>
-          <div className="wk-duelist"><DueChips items={due[date]} /></div>
-        </div>
-      )}
-
       <div className="wk-list" data-day-list={date} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <p className="wk-dayhead">{DAY_LONG[dayIdx]} {d.getDate()} {MONTHS[d.getMonth()]}</p>
-        {untimed.map((m) => (
-          <div key={m.goal.id} className="wk-item nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}>
-            <div className="wk-item-time">No time</div>
-            <div className="wk-item-body"><span className="l">{m.goal.text}</span><small>NWU class</small></div>
+        {untimed.length > 0 && (
+          <div className="wk-row">
+            <div className="wk-t slim">No time set</div>
+            <div className="slot-notime" data-notime={date}>
+              {untimed.map((m) => (
+                <span key={m.goal.id} className="slot-nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}
+                  title="NWU class, no time set">{m.goal.text}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {hourList.map((h) => (
+          <div className="wk-row" key={h}>
+            <div className="wk-t">{hourLabel(h)}</div>
+            <HourBox date={date} dayIdx={dayIdx} h={h} items={boxesByDate[date][h] || []}
+              isNow={date === today && h === nowH} hot={hot} readOnly={readOnly} pick={pick}
+              onItem={onItem} onAdd={onAdd} onHot={onHot} />
           </div>
         ))}
-        {rows.map((r) => {
-          if (r.type === 'gap') {
-            return (
-              <button key={`gap-${r.g.start}`} className="wk-gap" data-gap={`${minToTime(r.g.start)}-${minToTime(r.g.end)}`}
-                onClick={() => onAdd(date, r.g.start, r.g.end)}>
-                + {minToTime(r.g.start)}–{minToTime(r.g.end)} free
-              </button>
-            )
-          }
-          if (r.type === 'nwu') {
-            return (
-              <div key={`nwu-${r.m.goal.id}`} className="wk-item nwu" data-nwu-class="" style={{ '--c': r.m.goal.modules?.colour || 'var(--cyan)' }}>
-                <div className="wk-item-time">{minToTime(r.m.start)}<br />{minToTime(r.m.end)}</div>
-                <div className="wk-item-body"><span className="l">{r.m.goal.text}</span><small>NWU class</small></div>
-              </div>
-            )
-          }
-          const b = r.b
-          const locked = !!b.source
-          const title = blockTitle(b, modById)
-          const cls = ['wk-item']
-          if (b.done) cls.push('done')
-          if (locked) cls.push('locked')
-          if (pick && pick.id === b.id) cls.push('picking')
-          const code = b.module_id && modById[b.module_id]?.code
-          const sub = [code && b.label ? code : null, b.kind !== 'study' && b.kind !== 'class' ? KIND_NAME[b.kind] : null, b.note]
-            .filter(Boolean).join(' · ')
-          const body = (
-            <>
-              <span className="l">{locked && <span className="wk-lock" aria-label="Locked">🔒</span>}{title}</span>
-              {(sub || locked) && <small>{locked ? 'From the tutoring timetable' : sub}</small>}
-            </>
-          )
-          return (
-            <div key={b.id} className={cls.join(' ')} data-block-id={b.id} data-locked={locked ? '1' : undefined}
-              style={{ '--c': blockColour(b, modById) }}>
-              <div className="wk-item-time">{hm(b.start_time)}<br />{hm(b.end_time)}</div>
-              {locked
-                ? <div className="wk-item-body">{body}</div>
-                : (
-                  <button className="wk-item-body" disabled={readOnly || (pick && pick.id === b.id)}
-                    aria-label={pick ? `Swap with ${title}` : `Edit ${title}, ${hm(b.start_time)} to ${hm(b.end_time)}`}
-                    onClick={() => onEdit(b)}>{body}</button>
-                )}
-              {!locked && (
-                <button className="wk-tick" disabled={readOnly}
-                  aria-label={b.done ? `Mark not done: ${title}` : `Mark done: ${title}`}
-                  onClick={() => onTick(b)}>✓</button>
-              )}
-            </div>
-          )
-        })}
-        {!rows.length && !untimed.length && <p className="muted text-sm">Nothing planned.</p>}
       </div>
     </div>
   )
 }
 
-// ---------- the editor sheet ----------
+// ---------- panels (a hub .overlay/.system panel; a bottom sheet on a phone) ----------
 
-function BlockEditor({ init, dates, modules, busy, onSave, onDelete, onSwap, onClose }) {
+function Sheet({ label, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div className="overlay wk-sheet-back" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="system wk-sheet" role="dialog" aria-modal="true" aria-label={label}>{children}</div>
+    </div>
+  )
+}
+
+// Tap a block of hers: what it entails, the tick, and Edit / Swap / Delete.
+function BlockView({ block: b, dates, modById, busy, readOnly, onTick, onEdit, onDelete, onSwap, onClose }) {
+  const [ask, setAsk] = useState(false)          // the "just this one / later ones" question
+  const [armDelete, setArmDelete] = useState(false)
+  const title = blockTitle(b, modById)
+  const off = busy || readOnly
+
+  function del(scope) {
+    if (b.series_id && !scope) { setAsk(true); return }
+    if (!b.series_id && !armDelete) { setArmDelete(true); return }
+    onDelete(scope)
+  }
+
+  return (
+    <Sheet label={`Block: ${title}`} onClose={onClose}>
+      <div className="kicker">Block</div>
+      <div className="display wk-sheet-title" style={{ '--c': blockColour(b, modById) }}>{title}</div>
+      <dl className="wk-facts">
+        <dt>Subject</dt><dd>{subjectLine(b, modById)}</dd>
+        <dt>Day</dt><dd>{dayLabel(b.block_date, dates)}</dd>
+        <dt>Time</dt><dd>{timeRange(b)}</dd>
+        {b.note && <><dt>Note</dt><dd className="wk-note">{b.note}</dd></>}
+        {b.series_id && <><dt>Repeats</dt><dd>Every week</dd></>}
+      </dl>
+
+      {ask ? (
+        <div className="space-y-3 mt-4">
+          <p>This block repeats every week. Delete just this one, or this one and the later ones?</p>
+          <div className="wk-sheet-btns">
+            <button className="btn small" disabled={busy} onClick={() => onDelete('one')}>Just this one</button>
+            <button className="btn small" disabled={busy} onClick={() => onDelete('later')}>This and later ones</button>
+            <button className="btn small ghost" onClick={() => setAsk(false)}>Back</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3 mt-4">
+          <button className={`btn wk-done-btn${b.done ? ' green' : ''}`} disabled={off} aria-pressed={!!b.done}
+            onClick={() => onTick(b)}>
+            {b.done ? '✓ Done (tap to undo)' : 'Mark done'}
+          </button>
+          <div className="wk-sheet-btns">
+            <button className="btn small" disabled={off} onClick={() => onEdit(b)}>Edit</button>
+            <button className="btn small ghost" disabled={off} onClick={() => onSwap(b)}>Swap with…</button>
+            <button className="btn small ghost" disabled={off} onClick={() => del()}
+              style={armDelete ? { borderColor: 'var(--red)', color: 'var(--red)' } : undefined}>
+              {armDelete ? 'Tap again to delete' : 'Delete'}
+            </button>
+          </div>
+          <div className="wk-sheet-btns">
+            <button className="btn small ghost" onClick={onClose}>Close</button>
+          </div>
+          {readOnly && <p className="text-sm muted">Offline: editing is off until you are back online.</p>}
+        </div>
+      )}
+    </Sheet>
+  )
+}
+
+// A locked row (a class from the tutoring timetable, or a hard deadline): read only.
+function LockedView({ block: b, dates, modById, onClose }) {
+  const fixed = isHardDeadline(b)
+  const title = blockTitle(b, modById)
+  return (
+    <Sheet label={`${fixed ? 'Fixed' : 'Class'}: ${title}`} onClose={onClose}>
+      <div className="kicker">{fixed ? 'Hard deadline' : 'Class'}</div>
+      <div className="display wk-sheet-title" style={{ '--c': fixed ? FIXED_COLOUR : LOCKED_COLOUR }}>
+        {fixed && <span className="slot-tag">FIXED</span>} {title}
+      </div>
+      <dl className="wk-facts">
+        <dt>What</dt>
+        <dd>{fixed
+          ? 'A fixed appointment: it has to happen on this day, at this time.'
+          : 'A class from your tutoring timetable.'}</dd>
+        <dt>Day</dt><dd>{dayLabel(b.block_date, dates)}</dd>
+        <dt>Time</dt><dd>{timeRange(b)}</dd>
+      </dl>
+      <p className="text-sm muted mt-3">Locked: it comes from your timetable, so it can't be changed here.</p>
+      <div className="wk-sheet-btns mt-4">
+        <button className="btn small ghost" onClick={onClose}>Close</button>
+      </div>
+    </Sheet>
+  )
+}
+
+// New block, or Edit from the view panel. Her own blocks are whole hours: a start hour and a
+// length in hours. A block saved before with odd times keeps them unless she picks new ones.
+function BlockEditor({ init, dates, modules, busy, onSave, onCancel, onClose }) {
   const orig = init.block
   const initialChip = orig
     ? (orig.module_id ? `m:${orig.module_id}` : KIND_CHIPS.some((k) => k.kind === orig.kind) ? `k:${orig.kind}` : '')
@@ -837,21 +890,17 @@ function BlockEditor({ init, dates, modules, busy, onSave, onDelete, onSwap, onC
   const [note, setNote] = useState(orig?.note || '')
   const [repeat, setRepeat] = useState(false)
   const [until, setUntil] = useState(addDays(init.date, 7 * REPEAT_WEEKS))
-  const [ask, setAsk] = useState(null)          // 'save' | 'delete': the series question
-  const [armDelete, setArmDelete] = useState(false)
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const [ask, setAsk] = useState(false)          // the series question on save
 
   const starts = []
-  for (let m = 6 * 60; m < 24 * 60; m += 15) starts.push(m)
-  if (!starts.includes(start)) starts.unshift(start)
+  for (let h = 6; h < 24; h++) starts.push(h * 60)
+  if (!starts.includes(init.start)) starts.push(init.start)
+  starts.sort((a, b) => a - b)
   const lengths = []
-  for (let m = 15; m <= 8 * 60 && start + m <= 24 * 60; m += 15) lengths.push(m)
+  for (let h = 1; h <= MAX_LENGTH_H && start + h * 60 <= 24 * 60; h++) lengths.push(h * 60)
+  if (!lengths.includes(init.length) && start + init.length <= 24 * 60) lengths.push(init.length)
   if (!lengths.includes(length)) lengths.push(length)
+  lengths.sort((a, b) => a - b)
   const lengthOk = start + length <= 24 * 60
 
   const minUntil = addDays(date, 7)
@@ -869,134 +918,111 @@ function BlockEditor({ init, dates, modules, busy, onSave, onDelete, onSwap, onC
 
   function submit(scope) {
     if (!lengthOk) return
-    if (orig?.series_id && !scope) { setAsk('save'); return }
+    if (orig?.series_id && !scope) { setAsk(true); return }
     onSave(draft(), scope)
   }
 
-  function del(scope) {
-    if (orig?.series_id && !scope) { setAsk('delete'); return }
-    if (!orig?.series_id && !armDelete) { setArmDelete(true); return }
-    onDelete(scope)
-  }
-
-  const whenLabel = (() => {
-    const i = dates.indexOf(date)
-    const d = parseLocalDate(date)
-    return `${i >= 0 ? DAY_LONG[i] : ''} ${d.getDate()} ${MONTHS[d.getMonth()]} · ${minToTime(start)}–${minToTime(start + length)}`
-  })()
-
   return (
-    <div className="overlay wk-sheet-back" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="system wk-sheet" role="dialog" aria-modal="true" aria-label={orig ? 'Edit block' : 'New block'}>
-        <div className="kicker">{orig ? 'Edit block' : 'New block'}</div>
-        <div className="display" style={{ color: 'var(--cyan)', fontSize: 16, marginTop: 4 }}>{whenLabel}</div>
-
-        {ask ? (
-          <div className="space-y-3 mt-4">
-            <p>This block repeats every week. {ask === 'save' ? 'Change' : 'Delete'} just this one, or this one and the later ones?</p>
-            <div className="wk-sheet-btns">
-              <button className="btn small" disabled={busy}
-                onClick={() => (ask === 'save' ? onSave(draft(), 'one') : onDelete('one'))}>Just this one</button>
-              <button className="btn small" disabled={busy}
-                onClick={() => (ask === 'save' ? onSave(draft(), 'later') : onDelete('later'))}>This and later ones</button>
-              <button className="btn small ghost" onClick={() => setAsk(null)}>Back</button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4 mt-4">
-            <div className="field">
-              <label>Day</label>
-              <div className="wk-chips">
-                {dates.map((x, i) => (
-                  <button key={x} type="button" className={`wk-chip${x === date ? ' sel' : ''}`} style={{ '--c': 'var(--cyan)' }}
-                    aria-pressed={x === date} onClick={() => setDate(x)}>
-                    {DAY_SHORT[i]} {parseLocalDate(x).getDate()}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="wk-two">
-              <div className="field">
-                <label htmlFor="wk-start">Start</label>
-                <select id="wk-start" className="input" value={start} onChange={(e) => setStart(Number(e.target.value))}>
-                  {starts.map((m) => <option key={m} value={m}>{minToTime(m)}</option>)}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="wk-length">Length</label>
-                <select id="wk-length" className="input" value={length} onChange={(e) => setLength(Number(e.target.value))}>
-                  {lengths.map((m) => <option key={m} value={m}>{lengthLabel(m)}</option>)}
-                </select>
-              </div>
-            </div>
-            {!lengthOk && <p className="text-sm" style={{ color: 'var(--red)' }}>That runs past midnight. Pick a shorter length.</p>}
-
-            <div className="field">
-              <label>Subject</label>
-              <div className="wk-chips">
-                {modules.map((m) => {
-                  const v = `m:${m.id}`
-                  return (
-                    <button key={m.id} type="button" className={`wk-chip${chip === v ? ' sel' : ''}`}
-                      style={{ '--c': m.colour || 'var(--cyan)' }} aria-pressed={chip === v}
-                      onClick={() => setChip(chip === v ? '' : v)}>{m.code}</button>
-                  )
-                })}
-                {KIND_CHIPS.map((k) => {
-                  const v = `k:${k.kind}`
-                  return (
-                    <button key={k.kind} type="button" className={`wk-chip${chip === v ? ' sel' : ''}`}
-                      style={{ '--c': k.colour }} aria-pressed={chip === v}
-                      onClick={() => setChip(chip === v ? '' : v)}>{k.name}</button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="field">
-              <label htmlFor="wk-label">What's the plan?</label>
-              <input id="wk-label" className="input" maxLength={120} value={label}
-                placeholder="e.g. Chapter 3 summary" onChange={(e) => setLabel(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }} />
-            </div>
-
-            <div className="field">
-              <label htmlFor="wk-note">Note (optional)</label>
-              <textarea id="wk-note" className="input" rows={2} value={note}
-                placeholder="e.g. swapped because I was tired" onChange={(e) => setNote(e.target.value)} />
-            </div>
-
-            {canRepeat && (
-              <div className="wk-repeat">
-                <label className="wk-check">
-                  <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />
-                  Repeat every week until
-                </label>
-                <input type="date" className="input wk-date" aria-label="Repeat until" disabled={!repeat}
-                  min={minUntil} max={maxUntil} value={until} onChange={(e) => setUntil(e.target.value || until)} />
-              </div>
-            )}
-            {orig?.series_id && <p className="text-sm muted">This block repeats every week.</p>}
-
-            <div className="wk-sheet-btns">
-              <button className="btn small green" disabled={busy || !lengthOk} onClick={() => submit()}>
-                {busy ? 'Saving…' : 'Save'}
-              </button>
-              <button className="btn small ghost" onClick={onClose}>Cancel</button>
-            </div>
-            {orig && (
-              <div className="wk-sheet-btns">
-                <button className="btn small ghost" disabled={busy} onClick={() => onSwap(orig)}>Swap with…</button>
-                <button className="btn small ghost" disabled={busy} onClick={() => del()}
-                  style={armDelete ? { borderColor: 'var(--red)', color: 'var(--red)' } : undefined}>
-                  {armDelete ? 'Tap again to delete' : 'Delete'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+    <Sheet label={orig ? 'Edit block' : 'New block'} onClose={onClose}>
+      <div className="kicker">{orig ? 'Edit block' : 'New block'}</div>
+      <div className="display" style={{ color: 'var(--cyan)', fontSize: 16, marginTop: 4 }}>
+        {dayLabel(date, dates)} · {minToTime(start)} - {minToTime(start + length)}
       </div>
-    </div>
+
+      {ask ? (
+        <div className="space-y-3 mt-4">
+          <p>This block repeats every week. Change just this one, or this one and the later ones?</p>
+          <div className="wk-sheet-btns">
+            <button className="btn small" disabled={busy} onClick={() => onSave(draft(), 'one')}>Just this one</button>
+            <button className="btn small" disabled={busy} onClick={() => onSave(draft(), 'later')}>This and later ones</button>
+            <button className="btn small ghost" onClick={() => setAsk(false)}>Back</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4 mt-4">
+          <div className="field">
+            <label htmlFor="wk-label">What's the plan?</label>
+            <input id="wk-label" className="input" maxLength={120} value={label}
+              placeholder="e.g. Chapter 3 summary" onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }} />
+          </div>
+
+          <div className="field">
+            <label>Subject</label>
+            <div className="wk-chips">
+              {modules.map((m) => {
+                const v = `m:${m.id}`
+                return (
+                  <button key={m.id} type="button" className={`wk-chip${chip === v ? ' sel' : ''}`}
+                    style={{ '--c': m.colour || 'var(--cyan)' }} aria-pressed={chip === v}
+                    onClick={() => setChip(chip === v ? '' : v)}>{m.code}</button>
+                )
+              })}
+              {KIND_CHIPS.map((k) => {
+                const v = `k:${k.kind}`
+                return (
+                  <button key={k.kind} type="button" className={`wk-chip${chip === v ? ' sel' : ''}`}
+                    style={{ '--c': k.colour }} aria-pressed={chip === v}
+                    onClick={() => setChip(chip === v ? '' : v)}>{k.name}</button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Day</label>
+            <div className="wk-chips">
+              {dates.map((x, i) => (
+                <button key={x} type="button" className={`wk-chip${x === date ? ' sel' : ''}`} style={{ '--c': 'var(--cyan)' }}
+                  aria-pressed={x === date} onClick={() => setDate(x)}>
+                  {DAY_SHORT[i]} {parseLocalDate(x).getDate()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="wk-two">
+            <div className="field">
+              <label htmlFor="wk-start">Start</label>
+              <select id="wk-start" className="input" value={start} onChange={(e) => setStart(Number(e.target.value))}>
+                {starts.map((m) => <option key={m} value={m}>{minToTime(m)}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="wk-length">Length</label>
+              <select id="wk-length" className="input" value={length} onChange={(e) => setLength(Number(e.target.value))}>
+                {lengths.map((m) => <option key={m} value={m}>{lengthLabel(m)}</option>)}
+              </select>
+            </div>
+          </div>
+          {!lengthOk && <p className="text-sm" style={{ color: 'var(--red)' }}>That runs past midnight. Pick a shorter length.</p>}
+
+          <div className="field">
+            <label htmlFor="wk-note">Note (optional)</label>
+            <textarea id="wk-note" className="input" rows={2} value={note}
+              placeholder="e.g. swapped because I was tired" onChange={(e) => setNote(e.target.value)} />
+          </div>
+
+          {canRepeat && (
+            <div className="wk-repeat">
+              <label className="wk-check">
+                <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />
+                Repeat every week until
+              </label>
+              <input type="date" className="input wk-date" aria-label="Repeat until" disabled={!repeat}
+                min={minUntil} max={maxUntil} value={until} onChange={(e) => setUntil(e.target.value || until)} />
+            </div>
+          )}
+          {orig?.series_id && <p className="text-sm muted">This block repeats every week.</p>}
+
+          <div className="wk-sheet-btns">
+            <button className="btn small green" disabled={busy || !lengthOk} onClick={() => submit()}>
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+            <button className="btn small ghost" onClick={onCancel}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </Sheet>
   )
 }

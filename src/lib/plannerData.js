@@ -2,7 +2,7 @@
 // directly: it is handed ONE of these objects and calls the same six methods on either, so the
 // live view and the dev-only demo route run exactly the same component code.
 //
-//   fetchWeek(mon, sun)        → { blocks, goals, assessments, modules } for one Monday..Sunday
+//   fetchWeek(mon, sun)        → { blocks, goals, modules } for one Monday..Sunday
 //   fetchBlocks(from, to)      → plan_blocks rows with from <= block_date <= to
 //   fetchSeries(id, fromDate)  → the rows of one repeat series from fromDate onwards
 //   insert(rows)               → the inserted rows, ids and all
@@ -47,7 +47,7 @@ export const plannerDb = {
   demo: false,
 
   async fetchWeek(mon, sun) {
-    const [blocks, goals, assessments, modules] = await Promise.all([
+    const [blocks, goals, modules] = await Promise.all([
       run(supabase.from(TABLE).select('*')
         .gte('block_date', mon).lte('block_date', sun)
         .order('block_date').order('start_time')),
@@ -55,17 +55,13 @@ export const plannerDb = {
       run(supabase.from('goals')
         .select('id, text, kind, target_date, target_time, recurring, module_id, modules(code,colour)')
         .eq('kind', 'class')),
-      // Every status, not just 'upcoming': the strip shows submitted items too (muted, ticked).
-      run(supabase.from('assessments')
-        .select('id, title, due_date, status, module_id, modules(code,colour,hidden)')
-        .gte('due_date', mon).lte('due_date', sun)),
       run(supabase.from('modules').select('id, code, title, colour, hidden').order('code')),
     ])
+    // No assessments any more (unit 4): soft "due by" dates live on the dashboard and in Tests &
+    // Exams, not in the Week view. Hard deadlines arrive as locked plan_blocks rows instead.
     return {
       blocks: blocks || [],
       goals: goals || [],
-      // Same rule as the dashboard: a hidden module's deadlines never surface.
-      assessments: (assessments || []).filter((a) => !a.modules?.hidden),
       modules: modules || [],
     }
   },
@@ -107,13 +103,17 @@ export const plannerDb = {
 //
 // Test hooks, dev only: window.__weekDemo = { offline: true } makes every call fail as offline;
 // { failUpdate: 2 } makes the 2nd update from now fail (used to prove the swap rolls back).
-// Its data lives for the page's lifetime; a reload starts from the fixtures again.
+// Its data lives for the page's lifetime; a reload starts from the fixtures again. The layer itself
+// is also left on window.__weekDemoLayer (dev only), so a headless check can read the rows back.
 // ---------------------------------------------------------------------------------------------
 
 let demoInstance = null
 
 export function getDemoLayer() {
-  if (!demoInstance) demoInstance = makeDemoLayer()
+  if (!demoInstance) {
+    demoInstance = makeDemoLayer()
+    if (typeof window !== 'undefined') window.__weekDemoLayer = demoInstance
+  }
   return demoInstance
 }
 
@@ -129,11 +129,6 @@ function makeDemoLayer() {
     { id: 'm3', code: 'EDUC103', title: 'Module three', colour: '#ffd166', hidden: false },
     { id: 'm4', code: 'HIDE104', title: 'Hidden module', colour: '#9a6bff', hidden: true },
   ]
-  const modRef = (mid) => {
-    const m = modules.find((x) => x.id === mid)
-    return m ? { code: m.code, colour: m.colour, hidden: m.hidden } : null
-  }
-
   const b = (i, start, end, extra = {}) => ({
     id: id(), block_date: day(i), start_time: `${start}:00`, end_time: `${end}:00`,
     module_id: null, kind: 'study', label: '', done: false, done_at: null, note: null,
@@ -141,6 +136,9 @@ function makeDemoLayer() {
   })
   const lockedRow = (i, start, end) => b(i, start, end, {
     kind: 'class', label: 'Group lesson', source: 'whenworks', source_key: `ww:demo:${day(i)}`,
+  })
+  const hardRow = (i, start, end, label) => b(i, start, end, {
+    kind: 'other', label, source: 'whenworks', source_key: `ww:own:${day(i)}:${start}`,
   })
 
   let blocks = [
@@ -157,6 +155,9 @@ function makeDemoLayer() {
     b(4, '13:00', '14:00', { module_id: 'm3', label: 'Quiz practice' }),
     lockedRow(4, '17:00', '18:00'),
     b(6, '18:00', '19:00', { kind: 'prep', label: 'Plan the week' }),
+    // Hard deadlines: locked rows whose key starts ww:own:, drawn in the red "fixed" style.
+    hardRow(2, '09:00', '10:30', 'MATH101 Test 1'),
+    hardRow(4, '14:00', '14:45', 'ENGL102 Oral'),
   ]
   // A three-week repeat series on Saturday, so "just this one / this and later ones" has
   // something to act on.
@@ -173,14 +174,6 @@ function makeDemoLayer() {
     { id: 'g2', text: 'ENGL102 online session', kind: 'class', target_date: day(3), target_time: null,
       recurring: false, module_id: 'm2', modules: { code: 'ENGL102', colour: '#ff5c7a' } },
   ]
-
-  const assessments = [
-    { id: 'a1', title: 'Essay draft', due_date: day(2), status: 'upcoming', module_id: 'm2' },
-    { id: 'a2', title: 'Quiz 2', due_date: day(2), status: 'upcoming', module_id: 'm3' },
-    { id: 'a3', title: 'Test 1', due_date: day(4), status: 'submitted', module_id: 'm1' },
-    { id: 'a4', title: 'Reflection', due_date: day(4), status: 'upcoming', module_id: 'm3' },
-    { id: 'a5', title: 'Hidden item', due_date: day(4), status: 'upcoming', module_id: 'm4' },
-  ].map((a) => ({ ...a, modules: modRef(a.module_id) }))
 
   const hooks = () => (typeof window !== 'undefined' && window.__weekDemo) || {}
   const gate = async () => {
@@ -203,7 +196,6 @@ function makeDemoLayer() {
       return copy({
         blocks: sortBlocks(blocks.filter((x) => x.block_date >= from && x.block_date <= to)),
         goals,
-        assessments: assessments.filter((a) => a.due_date >= from && a.due_date <= to && !a.modules?.hidden),
         modules,
       })
     },
