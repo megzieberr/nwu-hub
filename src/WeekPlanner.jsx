@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toBlob } from 'html-to-image'
 import { ping } from './lib/ping'
 import { formatDue } from './lib/week'
 import {
@@ -12,7 +13,9 @@ import {
 // real time. Three faces of ONE component:
 //   • wide screen  : an hour axis, then MON .. SUN side by side;
 //   • phone (<760) : one day at a time, day tabs plus swipe, the same timeline;
-//   • wallpaper    : the timeline only, for a 1920x1080 screenshot.
+//   • wallpaper    : the timeline only, for a 1920x1080 screenshot (the #week-wall route), and
+//                    the same picture saved as a PNG by the Wallpaper button (her ask, 27 Sep:
+//                    "download the week I am in as a png, like whenworks does").
 //
 // The look (her rulings, 27 Sep): uni classes and tests SOLID in the module's hub colour; her own
 // study blocks an OUTLINE with a faint fill; classes she teaches an outline in the group's colour,
@@ -198,6 +201,8 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   const [hot, setHot] = useState(null)               // 'date|hour' of the box last tapped
   const [busy, setBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [shooting, setShooting] = useState(false)   // the wallpaper PNG is being made
+  const shotRef = useRef(null)
   const phoneWidth = useIsPhone()
   const isPhone = phoneWidth && !wall
   const loadSeq = useRef(0)
@@ -246,6 +251,37 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     const t = setTimeout(() => setNotice(''), 5000)
     return () => clearTimeout(t)
   }, [notice])
+
+  // Wallpaper PNG: the button mounts an off-screen 1920x1080 copy of the wallpaper for the week on
+  // screen (see the render), then this turns it into a picture and saves it to Downloads.
+  useEffect(() => {
+    if (!shooting) return
+    let gone = false
+    ;(async () => {
+      try {
+        await document.fonts.ready
+        const blob = await toBlob(shotRef.current, { width: 1920, height: 1080, pixelRatio: 1 })
+        if (gone) return
+        // A blob: link, like WhenWorks' wallpaper, not a data: link: her download manager (IDM)
+        // takes over Chrome downloads and cannot fetch a data: address, so that one errored.
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `hub-week-${monday}.png`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        // Revoked a moment later: revoking at once can cancel the download.
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        setNotice('Saved to your Downloads. Right-click it and choose "Set as desktop background".')
+      } catch (e) {
+        if (!gone) setError(`Could not make the wallpaper: ${e?.message || e}`)
+      } finally {
+        if (!gone) setShooting(false)
+      }
+    })()
+    return () => { gone = true }
+  }, [shooting]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wallpaper: Esc (or a tap, below) goes back to the normal Week view.
   useEffect(() => {
@@ -590,9 +626,21 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
               </span>
             )}
           <HoursPicker hours={hours} onChange={changeHours} />
-          {!isPhone && onOpenWall && (
-            <button className="btn small ghost" onClick={onOpenWall} title="Grid only, for a screenshot. Press F11, then PrtScn.">Wallpaper</button>
+          {!isPhone && (
+            <button className="btn small ghost" disabled={shooting} onClick={() => { setError(''); setShooting(true) }}
+              title="Save this week as a 1920x1080 picture for your desktop.">{shooting ? 'Saving…' : 'Wallpaper'}</button>
           )}
+        </div>
+      )}
+
+      {shooting && week && (
+        <div className="wk-shot-park" aria-hidden="true">
+          <div ref={shotRef} className="wk-wall wk-shot">
+            <div className="wk-wall-band">
+              <div className="wk-side">{rangeLabel(dates)}</div>
+              <Timeline {...gridProps} dates={dates} wall />
+            </div>
+          </div>
         </div>
       )}
 
