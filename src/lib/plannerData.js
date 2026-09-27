@@ -144,8 +144,9 @@ function makeDemoLayer() {
     kind: 'other', label, source: 'whenworks', source_key: `ww:own:${day(i)}:${start}`,
   })
   // A learner's exam date (ww:exam:): a solid bar at the top of the day.
-  const examRow = (i, start, end, label) => b(i, start, end, {
-    kind: 'other', label, source: 'whenworks', source_key: `ww:exam:${day(i)}:${label}`,
+  // /week writes these with placeholder times 00:00 to 00:01 and the paper's real time in the note.
+  const examRow = (i, start, end, label) => b(i, '00:00', '00:01', {
+    kind: 'other', label, note: `${start} to ${end}`, source: 'whenworks', source_key: `ww:exam:${day(i)}:${label}`,
   })
 
   let blocks = [

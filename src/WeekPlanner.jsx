@@ -922,7 +922,11 @@ const INFO = {
 function InfoView({ item: it, dates, onClose }) {
   const info = INFO[it.type] || INFO.class
   const date = it.b ? it.b.block_date : it.m.date
-  const hasTime = it.b ? !!(it.b.start_time && it.b.end_time) : !it.m.untimed
+  // An exam row's own times are placeholders (it lives in the top bar); /week puts the paper's
+  // real time, as WhenWorks has it, in the note.
+  const timeText = it.type === 'exam'
+    ? (it.b.note || null)
+    : (it.b ? (it.b.start_time && it.b.end_time ? timeRange(it.b) : null) : (it.m.untimed ? null : timeRange(it)))
   return (
     <Sheet label={`${info.kicker}: ${it.label}`} onClose={onClose}>
       <div className="kicker">{info.kicker}</div>
@@ -932,7 +936,7 @@ function InfoView({ item: it, dates, onClose }) {
       <dl className="wk-facts">
         <dt>What</dt><dd>{info.what}</dd>
         <dt>Day</dt><dd>{dayLabel(date, dates)}</dd>
-        {hasTime && <><dt>Time</dt><dd>{timeRange(it.b || it)}</dd></>}
+        {timeText && <><dt>Time</dt><dd>{timeText}</dd></>}
       </dl>
       <p className="text-sm muted mt-3">It comes from your timetable, so it can't be changed here.</p>
       <div className="wk-sheet-btns mt-4">
