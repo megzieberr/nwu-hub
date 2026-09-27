@@ -13,12 +13,31 @@ import SyncHealth from './SyncHealth'
 import { syncFailure } from './lib/synchealth'
 import { ping, pingMuted, setPingMuted } from './lib/ping'
 import * as pen from './lib/pen'
+import WeekPlanner from './WeekPlanner'
+import { plannerDb, getDemoLayer } from './lib/plannerData'
+
+// Week tab deep links (#week, #week-wall). The module page is not hash-routed.
+const WEEK_VIEWS = { '#week': 'week', '#week-wall': 'week-wall' }
+const weekViewFromHash = () => ({ name: WEEK_VIEWS[window.location.hash] || 'dashboard' })
 
 export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [role, setRole] = useState(null)
-  const [view, setView] = useState({ name: 'dashboard' })
+  const [view, setView] = useState(weekViewFromHash)
+  const [hash, setHash] = useState(() => window.location.hash)
+
+  useEffect(() => {
+    const onHash = () => {
+      setHash(window.location.hash)
+      const name = WEEK_VIEWS[window.location.hash]
+      if (name) setView({ name })
+      // Hash cleared (browser Back from #week): leave a Week view. Other hashes (#exams) stay put.
+      else if (!window.location.hash) setView((v) => (WEEK_VIEWS['#' + v.name] ? { name: 'dashboard' } : v))
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -38,20 +57,52 @@ export default function App() {
       .then(({ data }) => setRole(data?.role ?? null))
   }, [session])
 
+  // DEV ONLY: the Week tab on in-memory fixtures, no login (how it is checked without an account).
+  // import.meta.env.DEV is false in `vite build`, so this whole branch and the demo layer drop out.
+  if (import.meta.env.DEV) {
+    if (hash === '#week-demo' || hash === '#week-wall-demo') {
+      return (
+        <WeekScreen wall={hash === '#week-wall-demo'} db={getDemoLayer()} cacheId="demo"
+          onBack={() => { window.location.hash = '' }}
+          onOpenWall={() => { window.location.hash = '#week-wall-demo' }}
+          onExitWall={() => { window.location.hash = '#week-demo' }} />
+      )
+    }
+  }
+
   if (loading) return <Centered>Loading…</Centered>
   if (!session) return <Login />
   const isViewer = role === 'viewer'
+  const isWeek = view.name === 'week' || view.name === 'week-wall'
   return (
     <>
       {view.name === 'module' ? (
         <ModulePage code={view.code} isViewer={isViewer} userId={session.user.id} onBack={() => setView({ name: 'dashboard' })} />
+      ) : isWeek ? (
+        <WeekScreen wall={view.name === 'week-wall'} db={plannerDb} cacheId={session.user.id}
+          onBack={() => { history.replaceState(null, '', window.location.pathname + window.location.search); setView({ name: 'dashboard' }) }}
+          onOpenWall={() => { window.location.hash = '#week-wall' }}
+          onExitWall={() => { window.location.hash = '#week' }} />
       ) : (
-        <Dashboard isViewer={isViewer} userId={session.user.id} onOpenModule={(code) => setView({ name: 'module', code })} />
+        <Dashboard isViewer={isViewer} userId={session.user.id} onOpenModule={(code) => setView({ name: 'module', code })}
+          onOpenWeek={() => { window.location.hash = '#week' }} />
       )}
       {/* The Tests & Exams bubble rides above every view. Lize (viewer) sees the codes too — they're
-          class-wide — but read-only: no add/fix, no editing (enforced by RLS and hidden in the UI). */}
-      <ExamAccessFab userId={session.user.id} isViewer={isViewer} />
+          class-wide — but read-only: no add/fix, no editing (enforced by RLS and hidden in the UI).
+          Not on the Week wallpaper: that view is a clean screenshot. */}
+      {view.name !== 'week-wall' && <ExamAccessFab userId={session.user.id} isViewer={isViewer} />}
     </>
+  )
+}
+
+// The Week tab with the hub header, or bare for the wallpaper (no header, no buttons).
+function WeekScreen({ wall, db, cacheId, onBack, onOpenWall, onExitWall }) {
+  if (wall) return <WeekPlanner wall data={db} cacheId={cacheId} onExitWall={onExitWall} />
+  return (
+    <div className="min-h-screen">
+      <Header onBack={onBack}><PingToggle /></Header>
+      <WeekPlanner data={db} cacheId={cacheId} onOpenWall={onOpenWall} />
+    </div>
   )
 }
 
@@ -215,7 +266,7 @@ function Login() {
   )
 }
 
-function Dashboard({ isViewer, userId, onOpenModule }) {
+function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
   const [name, setName] = useState('')
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
@@ -420,6 +471,21 @@ function Dashboard({ isViewer, userId, onOpenModule }) {
                 "· partial", moved into SyncAlert above rather than being dropped. */}
           </div>
         </div>
+
+        {/* Week planner entry (both accounts; each sees only her own blocks). A full-width panel,
+            not a header icon: the phone header is already full at three. */}
+        <button onClick={onOpenWeek} className="panel bracket p-5 flex items-center gap-4 wk-entry">
+          <div style={{
+            width: 44, height: 44, borderRadius: 12, flex: '0 0 auto', fontSize: 22,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '2px solid var(--cyan)', background: 'rgba(2,8,22,.5)',
+          }}>🗓️</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="section-label">Week</div>
+            <div className="text-sm muted mt-1">Plan your study blocks and tick them off.</div>
+          </div>
+          <span className="mono muted" style={{ flex: '0 0 auto' }}>OPEN →</span>
+        </button>
 
         <Section title="My Week · next deadline per module"
           empty={!myWeekRows.length && !justDone && 'Nothing coming up — all clear. 🎉'}>

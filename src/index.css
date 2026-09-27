@@ -131,6 +131,150 @@ h1, h2, h3, .display { font-family: 'Orbitron', sans-serif; letter-spacing: 1px;
 }
 .kicker { color: var(--muted); letter-spacing: 5px; font-size: 11px; text-transform: uppercase; }
 
+/* ---------- Week planner (WeekPlanner.jsx) ----------
+   Built on the variables above; per-item colour arrives as --c (a module colour or a palette var). */
+.wk-entry { cursor: pointer; width: 100%; text-align: left; color: var(--text); }
+.wk-entry:hover { border-color: var(--cyan); box-shadow: var(--glow); }
+.wk-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wk-range { font-family: 'Orbitron'; font-weight: 700; font-size: 16px; letter-spacing: 1px; color: #eaf4ff; margin: 0 4px; }
+.wk-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wk-confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--red); }
+.wk-hours { display: inline-flex; align-items: center; gap: 6px; }
+.wk-select { width: auto; padding: 6px 8px; font-size: 15px; }
+.wk-wrap { display: flex; gap: 12px; }
+.wk-side {
+  writing-mode: vertical-rl; transform: rotate(180deg); flex: 0 0 auto;
+  font-family: 'Orbitron'; font-size: 22px; font-weight: 900; letter-spacing: 4px;
+  color: var(--cyan); text-shadow: 0 0 18px rgba(56, 225, 255, 0.4);
+  border-left: 1px solid var(--line); padding-left: 10px; text-align: center; white-space: nowrap;
+}
+.wk-grid { flex: 1; min-width: 0; display: grid; grid-template-columns: 50px repeat(7, minmax(0, 1fr)); gap: 4px; }
+.wk-dh, .wk-rl {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); min-height: 32px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: 'Orbitron'; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #eaf4ff;
+}
+.wk-rl { color: var(--muted); font-size: 9px; }
+.wk-dh small { font-size: 11px; color: var(--muted); }
+.wk-dh.today { background: rgba(56, 225, 255, 0.16); border-color: var(--cyan); box-shadow: var(--glow); color: var(--cyan); }
+.wk-cell { min-width: 0; min-height: 30px; padding: 3px; display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--line); border-radius: 6px; background: rgba(2, 8, 22, 0.4); }
+.wk-due {
+  display: block; min-width: 0; font-size: 12px; font-weight: 600; line-height: 1.3; padding: 1px 6px; border-radius: 6px;
+  border: 1px solid var(--c); color: var(--c); background: rgba(2, 8, 22, 0.55);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wk-due.done { opacity: 0.5; }
+.wk-due.wk-nwu-chip { background: var(--c); color: #04121f; }
+.wk-more { font-size: 11px; color: var(--muted); padding: 0 4px; }
+.wk-times { display: grid; min-width: 0; }
+.wk-times span { font-size: 12px; font-weight: 600; color: var(--muted); text-align: right; padding: 1px 4px 0 0; line-height: 1; }
+.wk-col {
+  display: grid; min-width: 0; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+  background-color: rgba(10, 18, 40, 0.45);
+  background-image: linear-gradient(to bottom, rgba(80, 140, 255, 0.16) 1px, transparent 1px);
+}
+.wk-col.today { border-color: var(--line-strong); }
+.wk-b {
+  grid-column: 1; justify-self: start; min-width: 0; margin: 1px 0; position: relative; overflow: hidden;
+  display: flex; flex-direction: column; padding: 2px 22px 2px 5px; border-radius: 6px; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--c) 60%, transparent); border-left: 3px solid var(--c);
+  background: color-mix(in srgb, var(--c) 24%, rgba(5, 7, 15, 0.9));
+  color: #eaf4ff; font-size: 12.5px; font-weight: 600; line-height: 1.15;
+}
+.wk-b .l, .wk-b .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-b .t { font-size: 11px; color: var(--muted); }
+.wk-b.done .l { text-decoration: line-through; opacity: 0.6; }
+.wk-b.locked, .wk-b.nwu { cursor: default; padding-right: 5px; }
+.wk-b.nwu { background: var(--c); border-color: var(--c); color: #04121f; }
+.wk-b.nwu .t { color: rgba(4, 18, 31, 0.75); }
+.wk-b.picking, .wk-item.picking .wk-item-body { outline: 2px dashed var(--cyan); outline-offset: 1px; }
+.wk-b-tick {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; cursor: pointer;
+  border-radius: 5px; border: 1px solid var(--line-strong); background: rgba(2, 8, 22, 0.6);
+  color: var(--muted); font-size: 11px; font-weight: 900; line-height: 1;
+}
+.wk-b.done .wk-b-tick { background: var(--green); border-color: var(--green); color: #04121f; }
+.wk-b-done { position: absolute; top: 1px; right: 4px; font-size: 12px; font-weight: 900; color: var(--green); }
+.wk-lock { font-size: 0.85em; margin-right: 3px; }
+.wk-live .wk-b[role="button"]:hover { border-color: var(--c); box-shadow: 0 0 12px color-mix(in srgb, var(--c) 45%, transparent); }
+
+/* phone day view */
+.wk-tabs { display: flex; gap: 4px; }
+.wk-tab {
+  flex: 1 1 0; min-width: 0; min-height: 48px; padding: 5px 0 6px; cursor: pointer; position: relative;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--muted); text-align: center;
+}
+.wk-tab b { display: block; font-family: 'Orbitron'; font-size: 10px; letter-spacing: 1px; }
+.wk-tab span { font-size: 18px; font-weight: 700; color: #eaf4ff; }
+.wk-tab.sel { background: rgba(56, 225, 255, 0.16); border-color: var(--cyan); box-shadow: var(--glow); color: var(--cyan); }
+.wk-tab.sel span { color: var(--cyan); }
+.wk-tab.today:not(.sel) { border-color: var(--line-strong); border-width: 2px; }
+.wk-tab.has::after {
+  content: ""; position: absolute; left: 50%; bottom: 3px; width: 5px; height: 5px; margin-left: -2.5px;
+  border-radius: 50%; background: var(--cyan); box-shadow: 0 0 6px var(--cyan);
+}
+.wk-duebar { display: flex; flex-direction: column; gap: 6px; }
+.wk-duelist { display: flex; flex-direction: column; gap: 4px; }
+.wk-duelist .wk-due { font-size: 14px; padding: 4px 8px; white-space: normal; }
+.wk-list { display: flex; flex-direction: column; gap: 6px; touch-action: pan-y; }
+.wk-dayhead { font-family: 'Orbitron'; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); margin: 0 0 2px; }
+.wk-item { display: flex; gap: 8px; align-items: stretch; min-height: 52px; }
+.wk-item-time {
+  flex: 0 0 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  font-size: 14px; font-weight: 600; line-height: 1.2; color: var(--muted);
+}
+.wk-item-body {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; text-align: left;
+  padding: 6px 10px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 16px; font-weight: 600; color: #eaf4ff;
+  border: 1px solid color-mix(in srgb, var(--c) 60%, transparent); border-left: 4px solid var(--c);
+  background: color-mix(in srgb, var(--c) 22%, rgba(5, 7, 15, 0.9));
+}
+.wk-item-body .l { overflow-wrap: anywhere; }
+.wk-item-body small { font-size: 13px; font-weight: 500; color: var(--muted); overflow-wrap: anywhere; }
+.wk-item.done .wk-item-body .l { text-decoration: line-through; opacity: 0.6; }
+.wk-item.locked .wk-item-body, .wk-item.nwu .wk-item-body { cursor: default; }
+.wk-item.nwu .wk-item-body { background: var(--c); border-color: var(--c); color: #04121f; }
+.wk-item.nwu .wk-item-body small { color: rgba(4, 18, 31, 0.75); }
+.wk-tick {
+  flex: 0 0 48px; min-height: 48px; cursor: pointer; border-radius: 10px;
+  border: 2px solid var(--line-strong); background: transparent; color: var(--muted); font-size: 20px; font-weight: 900;
+}
+.wk-item.done .wk-tick { background: var(--green); border-color: var(--green); color: #04121f; }
+.wk-gap {
+  min-height: 44px; width: 100%; padding: 0 12px; text-align: left; cursor: pointer;
+  border: 1px dashed var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 15px; font-weight: 600;
+}
+.wk-gap:hover { border-color: var(--cyan); color: var(--cyan); }
+.wk-item-body:disabled, .wk-tick:disabled, .wk-b-tick:disabled { cursor: default; }
+
+/* editor sheet (a hub .overlay/.system panel; a bottom sheet on a phone) */
+.wk-sheet { width: 100%; max-width: 520px; max-height: 92vh; overflow-y: auto; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+.wk-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wk-chip {
+  min-height: 40px; padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 15px; font-weight: 700; color: #eaf4ff;
+  border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 16%, transparent);
+}
+.wk-chip.sel { background: color-mix(in srgb, var(--c) 45%, transparent); box-shadow: 0 0 0 2px #eaf4ff, var(--glow); }
+.wk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wk-repeat { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wk-check { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.wk-check input { width: 20px; height: 20px; accent-color: var(--cyan); }
+.wk-date { width: auto; padding: 8px 10px; color-scheme: dark; }
+.wk-sheet-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.wk-sheet-btns .btn { flex: 1 1 0; }
+@media (max-width: 759px) {
+  .wk-sheet-back { align-items: flex-end; }
+  .wk-sheet { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+}
+
+/* wallpaper: grid centred in a band (16% side margins, 9% clear at the bottom for the taskbar,
+   as in the WhenWorks wallpaper). Nothing interactive, no hover. */
+.wk-wall { position: fixed; inset: 0; overflow: hidden; cursor: default; }
+.wk-wall-band { position: absolute; left: 16%; right: 16%; top: 5.5%; bottom: 9%; display: flex; gap: 12px; }
+.wk-wall .wk-grid { height: 100%; }
+.wk-wall .wk-col, .wk-wall .wk-b { cursor: default; }
+
 /* ---------- scrollbar + selection ---------- */
 ::selection { background: rgba(56, 225, 255, .3); color: #fff; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
