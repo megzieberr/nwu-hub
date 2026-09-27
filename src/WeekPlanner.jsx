@@ -1,19 +1,26 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ping } from './lib/ping'
 import { formatDue } from './lib/week'
 import {
   localDateStr, parseLocalDate, addDays, mondayOf, weekDates, minToTime, timeToMin,
-  expandRepeat, swapBlocks, copyWeek, classMarkersForWeek, hourBoxes, isWholeHours, isHardDeadline,
+  expandRepeat, swapBlocks, copyWeek, classMarkersForWeek, isHardDeadline, isExamRow, layoutDay,
+  groupColourFor, moduleForLabel, inkFor, liftForDark, LEARNER_GREY, dropDuplicateMarkers,
 } from './lib/planner.js'
 
-// The Week tab (sunday-planner/PLAN-week-tab.md, unit 4): her week as an hour-box grid, the same
-// look as the study planner, saving to plan_blocks exactly as before. Three faces of ONE component:
-//   • wide screen  : TIME | MON .. SUN, one box per hour per day;
-//   • phone (<760) : one day at a time, day tabs plus swipe, the same hour boxes top to bottom;
-//   • wallpaper    : the grid only, for a 1920x1080 screenshot.
+// The Week tab (sunday-planner/DESIGN-shovel-look.md, unit 6): her week as a timeline in the look
+// of her Shovel planner, saving to plan_blocks exactly as before. Every block is as tall as its
+// real time. Three faces of ONE component:
+//   • wide screen  : an hour axis, then MON .. SUN side by side;
+//   • phone (<760) : one day at a time, day tabs plus swipe, the same timeline;
+//   • wallpaper    : the timeline only, for a 1920x1080 screenshot.
 //
-// Which rows sit in which box, and every date/repeat/swap/copy decision, comes from lib/planner.js
-// (tested there). All reads and writes go through the `data` prop (lib/plannerData.js): the live
+// The look (her rulings, 27 Sep): uni classes and tests SOLID in the module's hub colour; her own
+// study blocks an OUTLINE with a faint fill; classes she teaches an outline in the group's colour,
+// one-on-one learners grey; learners' exam dates a solid bar at the top of the day. No "fixed"
+// tag, no lock, no block inside a block.
+//
+// Placement, colours and every date/repeat/swap/copy decision come from lib/planner.js (tested
+// there). All reads and writes go through the `data` prop (lib/plannerData.js): the live
 // Supabase layer, or the in-memory demo layer on the dev-only #week-demo route.
 
 const HOURS_KEY = 'nwuHub.week.hours'
@@ -23,25 +30,25 @@ const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DAY_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-// Fixed chips beside the module chips. Colours come from the hub palette, no new ones.
+// Fixed chips beside the module chips. The hub palette's values, as hex so a block can work out
+// its text colour and its edge from them.
 const KIND_CHIPS = [
-  { kind: 'prep', name: 'Prep', colour: 'var(--gold)' },
-  { kind: 'break', name: 'Break', colour: 'var(--green)' },
-  { kind: 'other', name: 'Other', colour: 'var(--blue)' },
+  { kind: 'prep', name: 'Prep', colour: '#ffd166' },
+  { kind: 'break', name: 'Break', colour: '#34f5c5' },
+  { kind: 'other', name: 'Other', colour: '#4d7cff' },
 ]
 const KIND_NAME = { study: 'Study', class: 'Class', prep: 'Prep', break: 'Break', other: 'Other' }
-const STUDY_COLOUR = 'var(--cyan)'
-const LOCKED_COLOUR = 'var(--purple)'   // classes copied in from the tutoring scheduler
-const FIXED_COLOUR = 'var(--red)'       // hard deadlines (ww:own: rows)
+const STUDY_COLOUR = '#38e1ff'          // her block with no module and no kind chip
+const NEUTRAL_SOLID = '#4d7cff'         // her own timetable row whose label names no module
 const REPEAT_WEEKS = 6                  // default "repeat every week until": 6 weeks ahead
 const REPEAT_CAP = 26
-const MAX_LENGTH_H = 8
+const MAX_LENGTH_MIN = 8 * 60
+const STEP_MIN = 15                     // her blocks start and end on quarter hours
 
 // ---------- small helpers (formatting only; the logic lives in planner.js) ----------
 
 const pad = (n) => String(n).padStart(2, '0')
 const hm = (t) => String(t || '').slice(0, 5)
-const hourLabel = (h) => `${pad(h)}:00 - ${pad(h + 1 === 24 ? 0 : h + 1)}:00`
 const timeRange = (b) => `${hm(b.start_time)} - ${hm(b.end_time)}`
 
 function rangeLabel(dates) {
@@ -115,34 +122,53 @@ function useIsPhone() {
   return m
 }
 
-// The current hour, refreshed every minute, for the "now" outline.
-function useNowHour() {
-  const [h, setH] = useState(() => new Date().getHours())
+// The time of day in minutes, refreshed every minute, for the "now" line.
+function useNowMin() {
+  const read = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() }
+  const [m, setM] = useState(read)
   useEffect(() => {
-    const t = setInterval(() => setH(new Date().getHours()), 60 * 1000)
+    const t = setInterval(() => setM(read()), 60 * 1000)
     return () => clearInterval(t)
   }, [])
-  return h
+  return m
 }
 
-// 'own' (hers, editable), 'locked' (a class from the scheduler), 'fixed' (a hard deadline).
+// 'own'   her block, editable                     → outline, module or kind colour
+// 'uni'   her own timetable row (ww:own:, a test)  → solid, module colour from its label
+// 'class' a class she teaches (from the scheduler) → outline, group colour or grey
+// 'exam'  a learner's exam date (ww:exam:)         → solid bar at the top of the day
 function rowType(b) {
   if (b.source == null) return 'own'
-  return isHardDeadline(b) ? 'fixed' : 'locked'
+  if (isExamRow(b)) return 'exam'
+  return isHardDeadline(b) ? 'uni' : 'class'
 }
 
-function blockColour(b, modById) {
+function blockColour(b, modById, modules) {
   const t = rowType(b)
-  if (t === 'fixed') return FIXED_COLOUR
-  if (t === 'locked') return LOCKED_COLOUR
+  if (t === 'uni') return moduleForLabel(b.label, modules)?.colour || NEUTRAL_SOLID
+  if (t === 'class' || t === 'exam') return groupColourFor(b.label) || LEARNER_GREY
   const m = b.module_id && modById[b.module_id]
   if (m && m.colour) return m.colour
   const k = KIND_CHIPS.find((x) => x.kind === b.kind)
   return k ? k.colour : STUDY_COLOUR
 }
 
+const isSolid = (type) => type === 'uni' || type === 'exam' || type === 'nwu'
+
+// The three colour variables a block is drawn with: its fill, its edge/text on the dark
+// background, and its text colour when solid.
+function lookVars(colour) {
+  return { '--c': colour, '--cb': liftForDark(colour), '--ink': inkFor(colour) }
+}
+
 function blockTitle(b, modById) {
   return b.label || (b.module_id && modById[b.module_id]?.code) || KIND_NAME[b.kind] || 'Study'
+}
+
+// "MATV121: online class — Wednesday, 19:00" → "MATV121: online class". The block already shows
+// the time, so the text after the dash only repeats it.
+function markerTitle(text) {
+  return String(text || '').split(' — ')[0].trim() || 'NWU class'
 }
 
 // "MATH101" or "Prep" or "Study": the module or kind line in the detail panel.
@@ -156,7 +182,7 @@ function subjectLine(b, modById) {
 
 export default function WeekPlanner({ data: db, cacheId = null, wall = false, onOpenWall, onExitWall }) {
   const today = useMemo(() => localDateStr(new Date()), [])
-  const nowH = useNowHour()
+  const nowMin = useNowMin()
   const [monday, setMonday] = useState(() => mondayOf(today))
   const dates = useMemo(() => weekDates(monday), [monday])
   const [selDay, setSelDay] = useState(() => Math.max(0, weekDates(mondayOf(today)).indexOf(today)))
@@ -233,30 +259,36 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   const modById = useMemo(() => Object.fromEntries(modules.map((m) => [m.id, m])), [modules])
   const chipModules = modules.filter((m) => !m.hidden)
   const blocks = week?.blocks || []
+  // NWU classes from the hub, minus any she also typed into the scheduler (drawn once, as that row).
   const markers = useMemo(
-    () => classMarkersForWeek(week?.goals || [], dates).filter((m) => m.date),
-    [week, dates])
+    () => dropDuplicateMarkers(classMarkersForWeek(week?.goals || [], dates).filter((m) => m.date), blocks, modules),
+    [week, dates, blocks, modules])
   const readOnly = status !== 'ok'
   const thisMonday = mondayOf(today)
 
-  // Every day's rows (her blocks, locked rows, timed NWU class markers) sorted into hour boxes.
-  const boxesByDate = useMemo(() => {
+  // Every day's timed rows (her blocks, the scheduler's rows, NWU classes) placed on the timeline,
+  // and the day's learners' exam dates for the bar at the top.
+  const dayData = useMemo(() => {
     const out = {}
     for (const d of dates) {
       const rows = [
-        ...blocks.filter((b) => b.block_date === d).map((b) => ({
-          key: b.id, id: b.id, type: rowType(b), b, label: blockTitle(b, modById), colour: blockColour(b, modById),
-          start_time: b.start_time, end_time: b.end_time,
+        ...blocks.filter((b) => b.block_date === d && !isExamRow(b)).map((b) => ({
+          key: b.id, id: b.id, type: rowType(b), b, label: blockTitle(b, modById),
+          colour: blockColour(b, modById, modules), start_time: b.start_time, end_time: b.end_time,
         })),
         ...markers.filter((m) => m.date === d && !m.untimed).map((m) => ({
-          key: `nwu-${m.goal.id}`, id: `nwu-${m.goal.id}`, type: 'nwu', m, label: m.goal.text,
+          key: `nwu-${m.goal.id}`, id: `nwu-${m.goal.id}`, type: 'nwu', m, label: markerTitle(m.goal.text),
+          colour: m.goal.modules?.colour || STUDY_COLOUR,
           start_time: minToTime(m.start), end_time: minToTime(m.end),
         })),
       ]
-      out[d] = hourBoxes(rows, hours.start, hours.end)
+      const exams = blocks.filter((b) => b.block_date === d && isExamRow(b))
+        .sort((a, b) => String(a.start_time || '').localeCompare(String(b.start_time || '')) || String(a.label).localeCompare(String(b.label)))
+        .map((b) => ({ key: b.id, id: b.id, type: 'exam', b, label: blockTitle(b, modById), colour: blockColour(b, modById, modules) }))
+      out[d] = { placed: layoutDay(rows, hours.start * 60, hours.end * 60), exams }
     }
     return out
-  }, [blocks, markers, dates, hours, modById])
+  }, [blocks, markers, dates, hours, modById, modules])
 
   const untimedByDate = useMemo(() => {
     const out = {}
@@ -296,18 +328,25 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     setHot(null)
   }
 
-  // Tap an empty hour box: a new block on that day and hour, one hour long.
-  function openNew(date, hour) {
+  // Tap an empty stretch of the timeline: a new block starting at that quarter hour, one hour long.
+  function openNew(date, startMin) {
     if (readOnly || busy || pick) return
     setError('')
-    setSheet({ mode: 'edit', block: null, date, start: hour * 60, length: 60 })
+    setSheet({ mode: 'edit', block: null, date, start: startMin, length: 60 })
   }
 
-  // Tap a block: see what it entails. In swap mode, the tap picks the partner instead.
-  function openItem(b) {
+  // Tap a block: see what it entails. In swap mode, the tap picks the partner instead. An NWU class
+  // from the hub has no plan_blocks row; it opens the same read-only panel.
+  function openItem(it) {
+    if (it.type === 'nwu') {
+      if (pick) return
+      setSheet({ mode: 'info', item: it })
+      return
+    }
+    const b = it.b
     if (pick) { choosePartner(b); return }
     setError('')
-    setSheet({ mode: b.source ? 'locked' : 'view', block: b })
+    setSheet(b.source ? { mode: 'info', item: it, block: b } : { mode: 'view', block: b })
   }
 
   function openEdit(b) {
@@ -477,7 +516,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   // ---------- render ----------
 
   const gridProps = {
-    dates, today, nowH, hours, boxesByDate, untimedByDate, readOnly: readOnly || busy, pick, hot,
+    today, nowMin, hours, dayData, untimedByDate, readOnly: readOnly || busy, pick, hot,
     onItem: openItem, onAdd: openNew, onHot: setHot,
   }
 
@@ -487,7 +526,7 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
         <div className="wk-wall-band">
           <div className="wk-side" aria-hidden="true">{rangeLabel(dates)}</div>
           {week
-            ? <WeekGrid {...gridProps} wall />
+            ? <Timeline {...gridProps} dates={dates} wall />
             : <div className="muted" style={{ alignSelf: 'center' }}>{status === 'loading' ? 'Loading…' : 'No copy of this week to show.'}</div>}
         </div>
       </div>
@@ -530,11 +569,11 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
       {status === 'loading' && !week && <p className="muted text-sm">Loading…</p>}
 
       {week && (isPhone
-        ? <DayView {...gridProps} blocks={blocks} dayIdx={selDay} setDayIdx={setSelDay} onSwipe={stepDay} />
+        ? <DayView {...gridProps} dates={dates} blocks={blocks} dayIdx={selDay} setDayIdx={setSelDay} onSwipe={stepDay} />
         : (
           <div className="wk-wrap">
             <div className="wk-side" aria-hidden="true">{rangeLabel(dates)}</div>
-            <WeekGrid {...gridProps} />
+            <Timeline {...gridProps} dates={dates} />
           </div>
         ))}
 
@@ -569,12 +608,12 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
       {sheet && sheet.mode === 'view' && liveBlock && (
         <BlockView
           key={`view-${liveBlock.id}`}
-          block={liveBlock} dates={dates} modById={modById} busy={busy} readOnly={readOnly}
+          block={liveBlock} dates={dates} modById={modById} modules={modules} busy={busy} readOnly={readOnly}
           onTick={toggleDone} onEdit={openEdit} onDelete={deleteBlock} onSwap={startSwap} onClose={closeSheet}
         />
       )}
-      {sheet && sheet.mode === 'locked' && liveBlock && (
-        <LockedView block={liveBlock} dates={dates} modById={modById} onClose={closeSheet} />
+      {sheet && sheet.mode === 'info' && sheet.item && (
+        <InfoView item={sheet.item} dates={dates} onClose={closeSheet} />
       )}
     </main>
   )
@@ -610,118 +649,158 @@ function HoursPicker({ hours, onChange }) {
   )
 }
 
-// ---------- one hour box (all three faces) ----------
+// ---------- one block on the timeline (all three faces) ----------
 
-// Everything in the box is shown, stacked; nothing is ever folded away. Her blocks, locked
-// classes and hard deadlines are each their own tap target. NWU class markers are thin read-only
-// tags; a box holding only those (or nothing) is itself the tap target for a new block.
-function HourBox({ date, dayIdx, h, items, isNow, hot, readOnly, pick, wall, onItem, onAdd, onHot }) {
-  const rows = items.filter((it) => it.type !== 'nwu')
-  const addable = !wall && !readOnly && !pick && rows.length === 0
-  const key = `${date}|${h}`
-  const cls = ['slot']
-  if (!items.length) cls.push('empty')
-  if (isNow && !wall) cls.push('now')
-  if (hot === key && !wall) cls.push('hot')
-  const d = parseLocalDate(date)
-  return (
-    <div className={cls.join(' ')} data-date={date} data-hour={h}
-      role={addable ? 'button' : undefined} tabIndex={addable ? 0 : undefined}
-      aria-label={addable ? `${DAY_LONG[dayIdx]} ${d.getDate()}, ${hourLabel(h)}: add a block` : undefined}
-      onPointerDown={wall ? undefined : () => onHot(key)}
-      onClick={addable ? () => onAdd(date, h) : undefined}
-      onKeyDown={addable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(date, h) } } : undefined}>
-      {items.map((it) => (
-        it.type === 'nwu'
-          ? (
-            <span key={it.key} className="slot-nwu" data-nwu-class="" style={{ '--c': it.m.goal.modules?.colour || 'var(--cyan)' }}
-              title={`NWU class, ${timeRange(it)}`}>
-              {it.label}{!isWholeHours(it) && <small> {timeRange(it)}</small>}
-            </span>
-          )
-          : <BoxItem key={it.key} it={it} wall={wall} pick={pick} onItem={onItem} />
-      ))}
-      {addable && <span className={`slot-plus${items.length ? ' side' : ''}`} aria-hidden="true">+</span>}
-    </div>
-  )
-}
-
-function BoxItem({ it, wall, pick, onItem }) {
+// As tall as its real time; overlapping blocks share the width side by side, so nothing is ever
+// folded away or drawn inside another block.
+function Ev({ p, wall, pick, onItem }) {
+  const it = p.row
   const b = it.b
-  const cls = ['slot-item', it.type]
+  const cls = ['ev', isSolid(it.type) ? 'ev-solid' : 'ev-line', it.type]
   if (it.type === 'own' && b.done) cls.push('done')
-  if (pick && pick.id === b.id) cls.push('picking')
-  const odd = !isWholeHours(b)
+  if (pick && b && pick.id === b.id) cls.push('picking')
+  const mins = timeToMin(it.end_time) - timeToMin(it.start_time)
+  if (mins <= 30) cls.push('short')
+  const style = {
+    ...lookVars(it.colour),
+    '--top': `${p.top}%`, '--h': `${p.height}%`, '--lane': p.lane, '--lanes': p.lanes,
+  }
   const inner = (
     <>
-      {it.type === 'fixed' && <span className="slot-tag">FIXED</span>}
-      <span className="slot-l">{it.type === 'locked' && <span className="wk-lock" aria-hidden="true">🔒</span>}{it.label}</span>
-      {odd && <small className="slot-t">{timeRange(b)}</small>}
+      <span className="ev-l">{it.label}</span>
+      <span className="ev-t">{timeRange(it)}</span>
     </>
   )
-  const style = { '--c': it.colour }
   if (wall) return <div className={cls.join(' ')} style={style}>{inner}</div>
-  const what = it.type === 'fixed' ? 'Fixed deadline' : it.type === 'locked' ? 'Class, locked' : pick ? 'Swap with' : 'Open'
+  const what = it.type === 'own' ? (pick ? 'Swap with' : 'Open') : it.type === 'nwu' ? 'NWU class' : it.type === 'uni' ? 'Your timetable' : 'Class'
   return (
     <button type="button" className={cls.join(' ')} style={style}
-      data-block-id={b.id} data-kind={it.type}
+      data-block-id={b ? b.id : it.id} data-kind={it.type}
       disabled={!!pick && (it.type !== 'own' || pick.id === b.id)}
-      aria-label={`${what}: ${it.label}, ${timeRange(b)}${b.done ? ', done' : ''}`}
-      onClick={(e) => { e.stopPropagation(); onItem(b) }}>
+      aria-label={`${what}: ${it.label}, ${timeRange(it)}${b && b.done ? ', done' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onItem(it) }}>
       {inner}
     </button>
   )
 }
 
-// ---------- wide grid (and the wallpaper) ----------
+// ---------- one day's column ----------
 
-function WeekGrid({ dates, today, nowH, hours, boxesByDate, untimedByDate, readOnly, pick, hot, onItem, onAdd, onHot, wall = false }) {
+// Hour cells behind the blocks are the tap targets for a new block: the tap's height inside the
+// cell picks the quarter hour. Blocks sit on top, placed by lib/planner.js layoutDay.
+function DayColumn({ date, dayIdx, today, nowMin, hours, placed, readOnly, pick, hot, wall, onItem, onAdd, onHot }) {
   const hourList = []
   for (let h = hours.start; h < hours.end; h++) hourList.push(h)
-  const anyUntimed = dates.some((d) => untimedByDate[d].length)
-  const rowTpl = wall ? 'minmax(0, 1fr)' : 'minmax(38px, auto)'
+  const addable = !wall && !readOnly && !pick
+  const range = (hours.end - hours.start) * 60
+  const nowTop = date === today && !wall && nowMin >= hours.start * 60 && nowMin < hours.end * 60
+    ? ((nowMin - hours.start * 60) / range) * 100 : null
+  const d = parseLocalDate(date)
   return (
-    <div className="wk-grid" data-week-grid=""
-      style={{ gridTemplateRows: `auto${anyUntimed ? ' auto' : ''} repeat(${hourList.length}, ${rowTpl})` }}>
-      <div className="wk-gh">TIME</div>
-      {dates.map((d, i) => (
-        <div key={d} className={`wk-gh${!wall && d === today ? ' today' : ''}`} data-day-head={d}>
-          {DAY_SHORT[i].toUpperCase()} <small>{parseLocalDate(d).getDate()}</small>
-        </div>
-      ))}
+    <div className={`tl-day${!wall && date === today ? ' today' : ''}`} data-day={date}>
+      {hourList.map((h) => {
+        const key = `${date}|${h}`
+        const cls = ['tl-cell']
+        if (hot === key && !wall) cls.push('hot')
+        return (
+          <div key={h} className={cls.join(' ')} data-date={date} data-hour={h}
+            role={addable ? 'button' : undefined} tabIndex={addable ? 0 : undefined}
+            aria-label={addable ? `${DAY_LONG[dayIdx]} ${d.getDate()}, ${pad(h)}:00: add a block` : undefined}
+            onPointerDown={wall ? undefined : () => onHot(key)}
+            onClick={addable ? (e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              const q = Math.min(3, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * 4)))
+              onAdd(date, h * 60 + q * STEP_MIN)
+            } : undefined}
+            onKeyDown={addable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(date, h * 60) } } : undefined}>
+            {addable && <span className="tl-plus" aria-hidden="true">+</span>}
+          </div>
+        )
+      })}
+      {nowTop != null && <div className="tl-now" style={{ top: `${nowTop}%` }} aria-hidden="true" />}
+      {placed.map((p) => <Ev key={p.row.key} p={p} wall={wall} pick={pick} onItem={onItem} />)}
+    </div>
+  )
+}
 
-      {anyUntimed && <div className="wk-gt slim">No time set</div>}
-      {anyUntimed && dates.map((d) => (
-        <div key={d} className="slot-notime" data-notime={d}>
-          {untimedByDate[d].map((m) => (
-            <span key={m.goal.id} className="slot-nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}
-              title="NWU class, no time set">{m.goal.text}</span>
+// ---------- the timeline: the week (wide, wallpaper) or one day (phone) ----------
+
+function Timeline({ dates, today, nowMin, hours, dayData, untimedByDate, readOnly, pick, hot, onItem, onAdd, onHot, wall = false, phone = false }) {
+  const hourList = []
+  for (let h = hours.start; h < hours.end; h++) hourList.push(h)
+  const anyExam = dates.some((d) => dayData[d].exams.length)
+  const anyUntimed = dates.some((d) => untimedByDate[d].length)
+  const cols = { '--days': dates.length, '--hours': hourList.length }
+  return (
+    <div className={`tl${phone ? ' phone' : ''}${wall ? ' wall' : ''}`} data-week-grid="" style={cols}>
+      {!phone && (
+        <div className="tl-row tl-head">
+          <div className="tl-corner" />
+          {dates.map((d) => {
+            const i = (parseLocalDate(d).getDay() + 6) % 7
+            return (
+              <div key={d} className={`tl-gh${!wall && d === today ? ' today' : ''}`} data-day-head={d}>
+                {DAY_SHORT[i].toUpperCase()} <small>{parseLocalDate(d).getDate()}</small>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {anyExam && (
+        <div className="tl-row tl-exams-row">
+          <div className="tl-lab">Exams</div>
+          {dates.map((d) => (
+            <div key={d} className="tl-exams" data-exams={d}>
+              {dayData[d].exams.map((it) => (
+                wall
+                  ? <div key={it.key} className="ex-bar" style={lookVars(it.colour)}>{it.label}</div>
+                  : (
+                    <button key={it.key} type="button" className="ex-bar" style={lookVars(it.colour)} data-kind="exam"
+                      disabled={!!pick} aria-label={`Exam: ${it.label}`}
+                      onClick={() => onItem(it)}>{it.label}</button>
+                  )
+              ))}
+            </div>
           ))}
         </div>
-      ))}
+      )}
 
-      {hourList.map((h) => (
-        <Fragment key={h}>
-          <div className="wk-gt">{hourLabel(h)}</div>
-          {dates.map((d, i) => (
-            <HourBox key={d} date={d} dayIdx={i} h={h} items={boxesByDate[d][h] || []}
-              isNow={d === today && h === nowH} hot={hot} readOnly={readOnly} pick={pick} wall={wall}
-              onItem={onItem} onAdd={onAdd} onHot={onHot} />
+      {anyUntimed && (
+        <div className="tl-row">
+          <div className="tl-lab">No time set</div>
+          {dates.map((d) => (
+            <div key={d} className="slot-notime" data-notime={d}>
+              {untimedByDate[d].map((m) => (
+                <span key={m.goal.id} className="slot-nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || STUDY_COLOUR }}
+                  title="NWU class, no time set">{m.goal.text}</span>
+              ))}
+            </div>
           ))}
-        </Fragment>
-      ))}
+        </div>
+      )}
+
+      <div className="tl-row tl-body">
+        <div className="tl-axis" aria-hidden="true">
+          {hourList.map((h, i) => (
+            <span key={h} className="tl-hr" style={{ top: `${(i / hourList.length) * 100}%` }}>{pad(h)}:00</span>
+          ))}
+        </div>
+        {dates.map((d) => (
+          <DayColumn key={d} date={d} dayIdx={(parseLocalDate(d).getDay() + 6) % 7} today={today} nowMin={nowMin}
+            hours={hours} placed={dayData[d].placed} readOnly={readOnly} pick={pick} hot={hot} wall={wall}
+            onItem={onItem} onAdd={onAdd} onHot={onHot} />
+        ))}
+      </div>
     </div>
   )
 }
 
 // ---------- phone: one day at a time ----------
 
-function DayView({ dates, today, nowH, hours, boxesByDate, untimedByDate, blocks, readOnly, pick, hot, onItem, onAdd, onHot, dayIdx, setDayIdx, onSwipe }) {
+function DayView({ dates, blocks, dayIdx, setDayIdx, onSwipe, ...grid }) {
   const date = dates[dayIdx]
   const d = parseLocalDate(date)
-  const untimed = untimedByDate[date] || []
-  const hourList = []
-  for (let h = hours.start; h < hours.end; h++) hourList.push(h)
 
   const touch = useRef(null)
   const onTouchStart = (e) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }
@@ -739,7 +818,7 @@ function DayView({ dates, today, nowH, hours, boxesByDate, untimedByDate, blocks
         {dates.map((x, i) => {
           const cls = ['wk-tab']
           if (i === dayIdx) cls.push('sel')
-          if (x === today) cls.push('today')
+          if (x === grid.today) cls.push('today')
           if (blocks.some((b) => b.block_date === x)) cls.push('has')
           return (
             <button key={x} className={cls.join(' ')} role="tab" aria-selected={i === dayIdx}
@@ -752,25 +831,7 @@ function DayView({ dates, today, nowH, hours, boxesByDate, untimedByDate, blocks
 
       <div className="wk-list" data-day-list={date} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <p className="wk-dayhead">{DAY_LONG[dayIdx]} {d.getDate()} {MONTHS[d.getMonth()]}</p>
-        {untimed.length > 0 && (
-          <div className="wk-row">
-            <div className="wk-t slim">No time set</div>
-            <div className="slot-notime" data-notime={date}>
-              {untimed.map((m) => (
-                <span key={m.goal.id} className="slot-nwu" data-nwu-class="" style={{ '--c': m.goal.modules?.colour || 'var(--cyan)' }}
-                  title="NWU class, no time set">{m.goal.text}</span>
-              ))}
-            </div>
-          </div>
-        )}
-        {hourList.map((h) => (
-          <div className="wk-row" key={h}>
-            <div className="wk-t">{hourLabel(h)}</div>
-            <HourBox date={date} dayIdx={dayIdx} h={h} items={boxesByDate[date][h] || []}
-              isNow={date === today && h === nowH} hot={hot} readOnly={readOnly} pick={pick}
-              onItem={onItem} onAdd={onAdd} onHot={onHot} />
-          </div>
-        ))}
+        <Timeline {...grid} dates={[date]} phone />
       </div>
     </div>
   )
@@ -792,7 +853,7 @@ function Sheet({ label, onClose, children }) {
 }
 
 // Tap a block of hers: what it entails, the tick, and Edit / Swap / Delete.
-function BlockView({ block: b, dates, modById, busy, readOnly, onTick, onEdit, onDelete, onSwap, onClose }) {
+function BlockView({ block: b, dates, modById, modules, busy, readOnly, onTick, onEdit, onDelete, onSwap, onClose }) {
   const [ask, setAsk] = useState(false)          // the "just this one / later ones" question
   const [armDelete, setArmDelete] = useState(false)
   const title = blockTitle(b, modById)
@@ -807,7 +868,7 @@ function BlockView({ block: b, dates, modById, busy, readOnly, onTick, onEdit, o
   return (
     <Sheet label={`Block: ${title}`} onClose={onClose}>
       <div className="kicker">Block</div>
-      <div className="display wk-sheet-title" style={{ '--c': blockColour(b, modById) }}>{title}</div>
+      <div className="display wk-sheet-title" style={{ '--c': liftForDark(blockColour(b, modById, modules)) }}>{title}</div>
       <dl className="wk-facts">
         <dt>Subject</dt><dd>{subjectLine(b, modById)}</dd>
         <dt>Day</dt><dd>{dayLabel(b.block_date, dates)}</dd>
@@ -849,25 +910,31 @@ function BlockView({ block: b, dates, modById, busy, readOnly, onTick, onEdit, o
   )
 }
 
-// A locked row (a class from the tutoring timetable, or a hard deadline): read only.
-function LockedView({ block: b, dates, modById, onClose }) {
-  const fixed = isHardDeadline(b)
-  const title = blockTitle(b, modById)
+// Anything that comes from a timetable (a class she teaches, her own test or class, a learner's
+// exam, an NWU class from the hub): what it is and when. Read only.
+const INFO = {
+  uni: { kicker: 'Your timetable', what: 'From your own timetable: it happens on this day, at this time.' },
+  class: { kicker: 'Class', what: 'A class from your tutoring timetable.' },
+  exam: { kicker: 'Exam', what: "A learner's exam date, from your tutoring timetable." },
+  nwu: { kicker: 'NWU class', what: 'A class from your NWU hub.' },
+}
+
+function InfoView({ item: it, dates, onClose }) {
+  const info = INFO[it.type] || INFO.class
+  const date = it.b ? it.b.block_date : it.m.date
+  const hasTime = it.b ? !!(it.b.start_time && it.b.end_time) : !it.m.untimed
   return (
-    <Sheet label={`${fixed ? 'Fixed' : 'Class'}: ${title}`} onClose={onClose}>
-      <div className="kicker">{fixed ? 'Hard deadline' : 'Class'}</div>
-      <div className="display wk-sheet-title" style={{ '--c': fixed ? FIXED_COLOUR : LOCKED_COLOUR }}>
-        {fixed && <span className="slot-tag">FIXED</span>} {title}
+    <Sheet label={`${info.kicker}: ${it.label}`} onClose={onClose}>
+      <div className="kicker">{info.kicker}</div>
+      <div className="display wk-sheet-title" style={{ '--c': liftForDark(it.colour) }}>
+        {it.type === 'nwu' ? it.m.goal.text : it.label}
       </div>
       <dl className="wk-facts">
-        <dt>What</dt>
-        <dd>{fixed
-          ? 'A fixed appointment: it has to happen on this day, at this time.'
-          : 'A class from your tutoring timetable.'}</dd>
-        <dt>Day</dt><dd>{dayLabel(b.block_date, dates)}</dd>
-        <dt>Time</dt><dd>{timeRange(b)}</dd>
+        <dt>What</dt><dd>{info.what}</dd>
+        <dt>Day</dt><dd>{dayLabel(date, dates)}</dd>
+        {hasTime && <><dt>Time</dt><dd>{timeRange(it.b || it)}</dd></>}
       </dl>
-      <p className="text-sm muted mt-3">Locked: it comes from your timetable, so it can't be changed here.</p>
+      <p className="text-sm muted mt-3">It comes from your timetable, so it can't be changed here.</p>
       <div className="wk-sheet-btns mt-4">
         <button className="btn small ghost" onClick={onClose}>Close</button>
       </div>
@@ -875,8 +942,9 @@ function LockedView({ block: b, dates, modById, onClose }) {
   )
 }
 
-// New block, or Edit from the view panel. Her own blocks are whole hours: a start hour and a
-// length in hours. A block saved before with odd times keeps them unless she picks new ones.
+// New block, or Edit from the view panel. Her own blocks start and end on quarter hours (the block
+// is drawn as tall as its real time). A block saved before with odd times keeps them unless she
+// picks new ones.
 function BlockEditor({ init, dates, modules, busy, onSave, onCancel, onClose }) {
   const orig = init.block
   const initialChip = orig
@@ -893,11 +961,11 @@ function BlockEditor({ init, dates, modules, busy, onSave, onCancel, onClose }) 
   const [ask, setAsk] = useState(false)          // the series question on save
 
   const starts = []
-  for (let h = 6; h < 24; h++) starts.push(h * 60)
+  for (let m = 6 * 60; m < 24 * 60; m += STEP_MIN) starts.push(m)
   if (!starts.includes(init.start)) starts.push(init.start)
   starts.sort((a, b) => a - b)
   const lengths = []
-  for (let h = 1; h <= MAX_LENGTH_H && start + h * 60 <= 24 * 60; h++) lengths.push(h * 60)
+  for (let m = STEP_MIN; m <= MAX_LENGTH_MIN && start + m <= 24 * 60; m += STEP_MIN) lengths.push(m)
   if (!lengths.includes(init.length) && start + init.length <= 24 * 60) lengths.push(init.length)
   if (!lengths.includes(length)) lengths.push(length)
   lengths.sort((a, b) => a - b)

@@ -6,6 +6,8 @@ import {
   timeToMin, minToTime, snap15, overlaps, gridRows, freeGaps,
   dueByDay, expandRepeat, swapBlocks, copyWeek, classMarkersForWeek,
   rowInHour, hourBoxes, isWholeHours, isHardDeadline,
+  isExamRow, layoutDay, GROUP_COLOURS, groupColourFor, moduleForLabel, inkFor, liftForDark,
+  INK_DARK, INK_LIGHT, dropDuplicateMarkers,
 } from '../src/lib/planner.js'
 
 let pass = 0
@@ -189,6 +191,56 @@ const weekOct12 = weekDates('2026-10-12')
 const markersNextWeek = classMarkersForWeek(goals, weekOct12)
 check('classMarkersForWeek: the one-off from g3 appears in ITS OWN week', markersNextWeek.find((m) => m.goal.id === 'g3')?.date, '2026-10-13')
 check('classMarkersForWeek: the recurring class also lands on Wednesday next week', markersNextWeek.find((m) => m.goal.id === 'g1')?.date, '2026-10-14')
+
+// ---- timeline layout (unit 6): blocks as tall as their real time ----
+const L = (rows) => layoutDay(rows, 6 * 60, 22 * 60)   // 06:00 to 22:00 = 960 minutes
+const r = (id, s, e, label = id) => ({ id, label, start_time: s, end_time: e })
+const oneOdd = L([r('a', '16:15:00', '17:00:00')])[0]
+check('layoutDay: 16:15-17:00 top is its real start', oneOdd.top, (975 - 360) / 960 * 100)
+check('layoutDay: 16:15-17:00 is 45 minutes tall, not an hour', oneOdd.height, 45 / 960 * 100)
+check('layoutDay: 90-minute test is 1.5 hours tall', L([r('t', '09:00', '10:30')])[0].height, 90 / 960 * 100)
+check('layoutDay: a lone row has the whole width', [oneOdd.lane, oneOdd.lanes], [0, 1])
+const pair = L([r('b', '14:30', '15:30'), r('a', '14:00', '15:00')])
+check('layoutDay: two overlapping rows sit side by side', pair.map((x) => [x.row.id, x.lane, x.lanes]), [['a', 0, 2], ['b', 1, 2]])
+const touch = L([r('a', '12:00', '13:00'), r('b', '13:00', '14:00')])
+check('layoutDay: touching rows do NOT share width', touch.map((x) => x.lanes), [1, 1])
+const chain = L([r('a', '10:00', '11:00'), r('b', '10:30', '11:30'), r('c', '11:00', '12:00')])
+check('layoutDay: a chain of three reuses the free lane', chain.map((x) => [x.row.id, x.lane, x.lanes]), [['a', 0, 2], ['b', 1, 2], ['c', 0, 2]])
+const clamp = L([r('a', '05:00', '07:00')])[0]
+check('layoutDay: a row starting before 06:00 is clamped to the top', [clamp.top, clamp.height], [0, 60 / 960 * 100])
+check('layoutDay: a row entirely outside the hours is left out', L([r('a', '05:00', '06:00'), r('b', '22:00', '23:00')]).length, 0)
+check('layoutDay: longer first when two start together', L([r('s', '09:00', '09:30'), r('l', '09:00', '11:00')]).map((x) => x.row.id), ['l', 's'])
+
+// ---- colours ----
+const mods = [
+  { id: 'm1', code: 'MATH121' }, { id: 'm2', code: 'MATV121' }, { id: 'm3', code: 'EDCC125' }, { id: 'm4', code: 'ALDE122' },
+]
+check('moduleForLabel: "MATH TEST" is MATH121, not MATV121', moduleForLabel('MATH TEST', mods)?.code, 'MATH121')
+check('moduleForLabel: "MATV CLASS" is MATV121', moduleForLabel('MATV CLASS', mods)?.code, 'MATV121')
+check('moduleForLabel: "EDDC EXAM" is EDCC125 (her other spelling)', moduleForLabel('EDDC EXAM', mods)?.code, 'EDCC125')
+check('moduleForLabel: "EDCC test" is EDCC125', moduleForLabel('EDCC test', mods)?.code, 'EDCC125')
+check('moduleForLabel: a code with digits works', moduleForLabel('ALDE122 Test 1', mods)?.code, 'ALDE122')
+check('moduleForLabel: no match gives null', moduleForLabel('Group lesson', mods), null)
+check('groupColourFor: each of the five groups', ['Gr12 HSK', 'Gr12 Curro', 'Grade 11', 'Graad 7', 'Graad 6'].map(groupColourFor),
+  [GROUP_COLOURS['Gr12 HSK'], GROUP_COLOURS['Gr12 Curro'], GROUP_COLOURS['Grade 11'], GROUP_COLOURS['Graad 7'], GROUP_COLOURS['Graad 6']])
+check('groupColourFor: an exam label that starts with the group', groupColourFor('Gr12 HSK: Maths P1'), GROUP_COLOURS['Gr12 HSK'])
+check('groupColourFor: a one-on-one learner gives null (grey)', groupColourFor('learner A'), null)
+check('groupColourFor: "Graad 60" is not "Graad 6"', groupColourFor('Graad 60'), null)
+check('inkFor: dark text on turquoise', inkFor('#34e1c8'), INK_DARK)
+check('inkFor: dark text on yellow', inkFor('#facc15'), INK_DARK)
+check('inkFor: white text on brown', inkFor('#b45309'), INK_LIGHT)
+check('liftForDark: brown is brightened', liftForDark('#b45309') !== '#b45309', true)
+check('liftForDark: turquoise stays as it is', liftForDark('#34e1c8'), '#34e1c8')
+check('isExamRow: ww:exam: row', isExamRow({ source: 'whenworks', source_key: 'ww:exam:x' }), true)
+check('isExamRow: ww:own: row is not', isExamRow({ source: 'whenworks', source_key: 'ww:own:x' }), false)
+
+// ---- one class, drawn once ----
+const mk = (id, date, start, code) => ({ goal: { id, modules: { code } }, date, start, end: start + 60, untimed: false })
+const own = (date, s, e, label) => ({ block_date: date, start_time: s, end_time: e, label, source: 'whenworks', source_key: `ww:own:${date}` })
+const dupMarkers = [mk('g1', '2026-09-30', 19 * 60, 'MATV121'), mk('g2', '2026-09-30', 19 * 60, 'MATH121'), mk('g3', '2026-10-01', 19 * 60, 'MATV121')]
+const kept = dropDuplicateMarkers(dupMarkers, [own('2026-09-30', '19:00', '20:30', 'MATV CLASS')], mods)
+check('dropDuplicateMarkers: same day, same module, overlapping: drawn once', kept.map((m) => m.goal.id), ['g2', 'g3'])
+check('dropDuplicateMarkers: untimed markers always kept', dropDuplicateMarkers([{ goal: { id: 'u' }, date: '2026-09-30', untimed: true }], [own('2026-09-30', '19:00', '20:00', 'MATV CLASS')], mods).length, 1)
 
 console.log(`${pass}/${pass + fail} checks passed`)
 process.exit(fail ? 1 : 0)

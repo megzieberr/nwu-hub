@@ -134,11 +134,18 @@ function makeDemoLayer() {
     module_id: null, kind: 'study', label: '', done: false, done_at: null, note: null,
     series_id: null, source: null, source_key: null, ...extra,
   })
-  const lockedRow = (i, start, end) => b(i, start, end, {
-    kind: 'class', label: 'Group lesson', source: 'whenworks', source_key: `ww:demo:${day(i)}`,
+  // A class she teaches: the label is a group's short name (group colour) or anything else (a
+  // one-on-one learner, grey). Name-free placeholders only.
+  const lockedRow = (i, start, end, label = 'Gr12 HSK') => b(i, start, end, {
+    kind: 'class', label, source: 'whenworks', source_key: `ww:demo:${day(i)}:${start}`,
   })
+  // Her own timetable (ww:own:): solid, in the colour of the module its label names.
   const hardRow = (i, start, end, label) => b(i, start, end, {
     kind: 'other', label, source: 'whenworks', source_key: `ww:own:${day(i)}:${start}`,
+  })
+  // A learner's exam date (ww:exam:): a solid bar at the top of the day.
+  const examRow = (i, start, end, label) => b(i, start, end, {
+    kind: 'other', label, source: 'whenworks', source_key: `ww:exam:${day(i)}:${label}`,
   })
 
   let blocks = [
@@ -146,18 +153,24 @@ function makeDemoLayer() {
     lockedRow(0, '16:15', '17:00'),
     b(1, '14:00', '15:00', { module_id: 'm2', label: 'Essay outline' }),
     b(1, '14:30', '15:30', { kind: 'prep', label: 'Lesson prep' }),          // overlaps the one above
+    hardRow(1, '12:00', '13:30', 'MATH CLASS'),   // the same class as the hub's Tuesday lecture: drawn once
     b(2, '10:00', '12:00', { module_id: 'm3', label: 'Unit 2 notes' }),
     b(2, '16:15', '17:00', { module_id: 'm1', label: 'Past paper drill' }),
     b(2, '19:30', '20:00', { kind: 'break', label: 'Walk' }),
     b(3, '11:00', '12:30', { module_id: 'm2', label: 'Reading log', done: true, done_at: new Date().toISOString() }),
-    lockedRow(3, '16:15', '17:00'),
+    lockedRow(3, '15:00', '15:45', 'Grade 11'),
+    lockedRow(3, '16:15', '17:00', 'learner A'),
     b(4, '10:00', '11:00', { kind: 'other', label: 'Admin' }),
     b(4, '13:00', '14:00', { module_id: 'm3', label: 'Quiz practice' }),
-    lockedRow(4, '17:00', '18:00'),
+    lockedRow(4, '17:00', '18:00', 'Graad 7'),
+    lockedRow(5, '13:00', '13:45', 'Gr12 Curro'),
+    lockedRow(5, '14:00', '14:45', 'Graad 6'),
     b(6, '18:00', '19:00', { kind: 'prep', label: 'Plan the week' }),
-    // Hard deadlines: locked rows whose key starts ww:own:, drawn in the red "fixed" style.
     hardRow(2, '09:00', '10:30', 'MATH101 Test 1'),
     hardRow(4, '14:00', '14:45', 'ENGL102 Oral'),
+    examRow(3, '09:00', '12:00', 'Gr12 HSK: Maths P1'),
+    examRow(3, '09:00', '11:00', 'Grade 11: Maths P2'),
+    examRow(4, '09:00', '12:00', 'learner B: Maths P1'),
   ]
   // A three-week repeat series on Saturday, so "just this one / this and later ones" has
   // something to act on.
@@ -173,6 +186,9 @@ function makeDemoLayer() {
     // One-off NWU class with no time: goes in the untimed row, this week only (a Thursday).
     { id: 'g2', text: 'ENGL102 online session', kind: 'class', target_date: day(3), target_time: null,
       recurring: false, module_id: 'm2', modules: { code: 'ENGL102', colour: '#ff5c7a' } },
+    // Recurring NWU class, timed, with no scheduler twin: drawn solid on Wednesday evening.
+    { id: 'g3', text: 'ENGL102: online class — Wednesday, 19:00', kind: 'class', target_date: day(2), target_time: '19:00:00',
+      recurring: true, module_id: 'm2', modules: { code: 'ENGL102', colour: '#ff5c7a' } },
   ]
 
   const hooks = () => (typeof window !== 'undefined' && window.__weekDemo) || {}

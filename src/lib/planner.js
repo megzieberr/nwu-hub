@@ -136,6 +136,144 @@ export function isHardDeadline(row) {
   return !!row && row.source === 'whenworks' && String(row.source_key || '').startsWith('ww:own:')
 }
 
+// A learner's exam date, copied from the tutoring scheduler (unit 7 writes these). Drawn as a
+// solid bar at the TOP of the day, never in a time slot.
+export function isExamRow(row) {
+  return !!row && row.source === 'whenworks' && String(row.source_key || '').startsWith('ww:exam:')
+}
+
+// ---------- timeline (the Week view's grid since unit 6) ----------
+
+// Where each row of ONE day sits on a timeline that runs startMin..endMin: top and height as
+// percentages of that range (so the same numbers work for any column height), plus a lane when
+// rows overlap. Rows that overlap each other form a cluster and share its width side by side;
+// touching ends (12:00 and 12:00) do NOT overlap. A row sticking out of the visible hours is
+// clamped to them; a row entirely outside is left out. Order is start, then longer first, then
+// label, then id, so the layout never depends on fetch order.
+export function layoutDay(rows, startMin, endMin) {
+  const range = endMin - startMin
+  const items = (rows || [])
+    .map((row) => ({ row, s: Math.max(timeToMin(row.start_time), startMin), e: Math.min(timeToMin(row.end_time), endMin) }))
+    .filter((x) => x.e > x.s)
+    .sort((a, b) => a.s - b.s || b.e - a.e ||
+      String(a.row.label || '').localeCompare(String(b.row.label || '')) ||
+      String(a.row.id || '').localeCompare(String(b.row.id || '')))
+
+  const out = []
+  let cluster = []
+  let laneEnds = []
+  let clusterEnd = -1
+  const close = () => {
+    for (const c of cluster) c.lanes = laneEnds.length
+    out.push(...cluster)
+    cluster = []
+    laneEnds = []
+  }
+  for (const it of items) {
+    if (cluster.length && it.s >= clusterEnd) close()
+    let lane = laneEnds.findIndex((end) => end <= it.s)
+    if (lane < 0) { lane = laneEnds.length; laneEnds.push(it.e) } else laneEnds[lane] = it.e
+    clusterEnd = cluster.length ? Math.max(clusterEnd, it.e) : it.e
+    cluster.push({
+      row: it.row, lane, lanes: 1,
+      top: ((it.s - startMin) / range) * 100,
+      height: ((it.e - it.s) / range) * 100,
+    })
+  }
+  if (cluster.length) close()
+  return out
+}
+
+// ---------- colours ----------
+
+// The five groups she teaches, keyed by the SHORT name the scheduler puts in a row's label (her
+// colours, 27 Sep). Any other class label is a one-on-one learner: grey. Group names only, never a
+// learner's name (public repo).
+export const GROUP_COLOURS = {
+  'Gr12 HSK': '#22a55b',     // dark green
+  'Gr12 Curro': '#c026d3',   // strong pink-purple
+  'Grade 11': '#ef4444',     // red
+  'Graad 7': '#3b63e0',      // dark blue
+  'Graad 6': '#facc15',      // yellow
+}
+export const LEARNER_GREY = '#8a94a8'
+
+// The group a label belongs to: the label IS the group name, or starts with it followed by a
+// space or punctuation ("Gr12 HSK: Maths P1" for an exam bar). Null for anything else.
+export function groupColourFor(label) {
+  const l = String(label || '').trim()
+  for (const [name, colour] of Object.entries(GROUP_COLOURS)) {
+    if (l === name) return colour
+    if (l.startsWith(name) && /^[^A-Za-z0-9]/.test(l.slice(name.length))) return colour
+  }
+  return null
+}
+
+// Her own timetable rows carry no module, only a label such as "MATH TEST" or "EDDC EXAM". The
+// letters of the first word pick the module whose code starts with them; EDDC is her other
+// spelling of EDCC. Null when nothing matches.
+const MODULE_ALIASES = { EDDC: 'EDCC' }
+export function moduleForLabel(label, modules) {
+  const word = String(label || '').trim().split(/\s+/)[0] || ''
+  const letters = word.replace(/[^A-Za-z]/g, '').toUpperCase()
+  if (letters.length < 3) return null
+  const prefix = MODULE_ALIASES[letters] || letters
+  return (modules || []).find((m) => String(m.code || '').toUpperCase().startsWith(prefix)) || null
+}
+
+function hexRgb(hex) {
+  const h = String(hex || '').replace('#', '')
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null
+  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16))
+}
+
+function luminance(rgb) {
+  const [r, g, b] = rgb.map((v) => {
+    const c = v / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+// Text colour for a SOLID block: whichever of near-black or white reads better on it.
+export const INK_DARK = '#04121f'
+export const INK_LIGHT = '#ffffff'
+export function inkFor(hex) {
+  const rgb = hexRgb(hex)
+  if (!rgb) return INK_LIGHT
+  const L = luminance(rgb)
+  const onWhite = 1.05 / (L + 0.05)
+  const onDark = (L + 0.05) / (luminance(hexRgb(INK_DARK)) + 0.05)
+  return onDark >= onWhite ? INK_DARK : INK_LIGHT
+}
+
+// The edge and text colour for an OUTLINE block on the hub's near-black background: a dark colour
+// (brown, dark blue) is brightened toward white so the edge still shows. Same hue, never a new one.
+export function liftForDark(hex) {
+  const rgb = hexRgb(hex)
+  if (!rgb) return hex
+  if (luminance(rgb) >= 0.16) return hex   // brown (0.158) and dark blue (0.152) sit just under
+  const mix = rgb.map((v) => Math.round(v + (255 - v) * 0.4))
+  return '#' + mix.map((v) => v.toString(16).padStart(2, '0')).join('')
+}
+
+// An NWU class from the hub (a goal) and the same class typed into the scheduler (a ww:own: row)
+// must draw once. A marker is dropped when a ww:own: row on its date, for the same module, overlaps
+// its hour. `markers` are classMarkersForWeek output; untimed markers are never dropped.
+export function dropDuplicateMarkers(markers, blocks, modules) {
+  return (markers || []).filter((m) => {
+    if (m.untimed || !m.date) return true
+    const code = m.goal?.modules?.code || ''
+    return !(blocks || []).some((b) => {
+      if (!isHardDeadline(b) || b.block_date !== m.date) return false
+      const mod = moduleForLabel(b.label, modules)
+      if (!mod || mod.code !== code) return false
+      return timeToMin(b.start_time) < m.end && timeToMin(b.end_time) > m.start
+    })
+  })
+}
+
 // Free gaps for ONE day's blocks (they may overlap each other), inside the visible hours, in time
 // order. Gaps under 15 minutes are left out — too short to offer as a "+ free" slot.
 export function freeGaps(blocks, dayStartMin, dayEndMin) {
