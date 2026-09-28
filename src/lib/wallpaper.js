@@ -327,7 +327,7 @@ export function buildWallpaper({ size, model, measure, frame = FRAME }) {
       const by = bodyTop + (b.top / 100) * bodyH + seam
       const bh = Math.max((b.height / 100) * bodyH, px(18)) - seam * 2
 
-      // SOLID (uni classes and tests) or OUTLINE with a faint fill (study, classes she teaches).
+      // SOLID (a fixed time) or OUTLINE with a faint fill (a study block she can move).
       const edge = b.solid ? b.colour : liftForDark(b.colour)
       const sw = b.solid ? Math.max(1, px(1)) : Math.max(2, px(2))
       ops.push({

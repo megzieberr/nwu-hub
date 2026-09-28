@@ -194,7 +194,8 @@ h1, h2, h3, .display { font-family: 'Orbitron', sans-serif; letter-spacing: 1px;
 .tl-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--cyan); box-shadow: 0 0 8px var(--cyan); z-index: 3; pointer-events: none; }
 .tl-now::before { content: ""; position: absolute; left: -1px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); }
 
-/* one block: SOLID (uni classes and tests, NWU classes) or OUTLINE (study, classes she teaches) */
+/* one block: SOLID (every fixed time: uni classes and tests, classes she teaches) or OUTLINE
+   (her own study blocks, which she can move and swap) */
 .ev {
   position: absolute; z-index: 2; box-sizing: border-box; overflow: hidden; cursor: pointer;
   top: var(--top); height: var(--h); min-height: 18px;

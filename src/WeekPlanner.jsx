@@ -18,10 +18,10 @@ import { renderWallpaper, saveCanvas } from './lib/wallpaperPaint.js'
 // not a third face of the page: it is DRAWN from the same placed rows by lib/wallpaper.js, at the
 // real size of her screen. The Wallpaper button saves it; the #week-wall route shows it.
 //
-// The look (her rulings, 27 Sep): uni classes and tests SOLID in the module's hub colour; her own
-// study blocks an OUTLINE with a faint fill; classes she teaches an outline in the group's colour,
-// one-on-one learners grey; learners' exam dates a solid bar at the top of the day. No "fixed"
-// tag, no lock, no block inside a block.
+// The look (her rulings, 27 and 28 Sep): every FIXED time is SOLID, uni classes and tests in the
+// module's hub colour, classes she teaches in the group's colour, one-on-one learners grey; her
+// own study blocks, which she can move and swap, are an OUTLINE with a faint fill; learners' exam
+// dates a solid bar at the top of the day. No "fixed" tag, no lock, no block inside a block.
 //
 // Placement, colours and every date/repeat/swap/copy decision come from lib/planner.js (tested
 // there). All reads and writes go through the `data` prop (lib/plannerData.js): the live
@@ -139,7 +139,7 @@ function useNowMin() {
 
 // 'own'   her block, editable                     → outline, module or kind colour
 // 'uni'   her own timetable row (ww:own:, a test)  → solid, module colour from its label
-// 'class' a class she teaches (from the scheduler) → outline, group colour or grey
+// 'class' a class she teaches (from the scheduler) → solid, group colour or grey
 // 'exam'  a learner's exam date (ww:exam:)         → solid bar at the top of the day
 function rowType(b) {
   if (b.source == null) return 'own'
@@ -157,7 +157,9 @@ function blockColour(b, modById, modules) {
   return k ? k.colour : STUDY_COLOUR
 }
 
-const isSolid = (type) => type === 'uni' || type === 'exam' || type === 'nwu'
+// Her rule (28 Sep): a FIXED time is solid; a study block she can move or swap any time is an
+// outline. Only her own blocks can be moved, so everything else is solid.
+const isSolid = (type) => type !== 'own'
 
 // The three colour variables a block is drawn with: its fill, its edge/text on the dark
 // background, and its text colour when solid.
