@@ -278,26 +278,11 @@ h1, h2, h3, .display { font-family: 'Orbitron', sans-serif; letter-spacing: 1px;
   .wk-sheet { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 }
 
-/* wallpaper: the same timeline in a fixed band for a 1920x1080 screenshot (240px left, 120px
-   right, 48px top and bottom). Nothing interactive: no hover, no "now" line. */
-.wk-wall { position: fixed; inset: 0; overflow: hidden; cursor: default; }
-.wk-wall-band { position: absolute; left: 240px; right: 120px; top: 48px; bottom: 48px; display: flex; gap: 14px; }
-.wk-wall .tl { height: 100%; }
-.wk-wall .tl-body { flex: 1 1 0; height: auto; min-height: 0; }
-.wk-wall .ev, .wk-wall .ex-bar { cursor: default; }
-.wk-wall .ev:hover, .wk-wall .ex-bar:hover { box-shadow: none; }
-/* the Wallpaper button's copy: the same wallpaper at a fixed 1920x1080 while html-to-image turns
-   it into a PNG. It is hidden by a zero-size clipping box around it, NOT by pushing it off screen:
-   the library copies the copy's own position into the picture, so left:-4000px drew a blank PNG.
-   It carries the page's own dark ground, since there is no body behind it in the picture. */
-.wk-shot-park { position: fixed; left: 0; top: 0; width: 0; height: 0; overflow: hidden; pointer-events: none; }
-.wk-shot {
-  position: absolute; inset: auto; left: 0; top: 0; width: 1920px; height: 1080px;
-  background:
-    radial-gradient(1200px 700px at 50% -10%, rgba(77, 124, 255, 0.18), transparent 60%),
-    radial-gradient(900px 600px at 100% 100%, rgba(154, 107, 255, 0.14), transparent 55%),
-    var(--bg);
-}
+/* wallpaper (#week-wall): the picture the Wallpaper button saves, fitted to the window. The
+   picture itself is drawn by lib/wallpaper.js, not laid out here. */
+.wk-wall { position: fixed; inset: 0; overflow: hidden; cursor: default; background: var(--bg); display: flex; align-items: center; justify-content: center; }
+.wk-wall-pic { display: block; max-width: 100vw; max-height: 100vh; }
+.wk-wall-err { position: absolute; left: 16px; bottom: 16px; color: var(--red); font-size: 15px; }
 
 /* ---------- scrollbar + selection ---------- */
 ::selection { background: rgba(56, 225, 255, .3); color: #fff; }

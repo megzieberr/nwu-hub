@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { toBlob } from 'html-to-image'
 import { ping } from './lib/ping'
 import { formatDue } from './lib/week'
 import {
@@ -7,15 +6,17 @@ import {
   expandRepeat, swapBlocks, copyWeek, classMarkersForWeek, isHardDeadline, isExamRow, layoutDay,
   groupColourFor, moduleForLabel, inkFor, liftForDark, LEARNER_GREY, dropDuplicateMarkers,
 } from './lib/planner.js'
+import { wallpaperFileName } from './lib/wallpaper.js'
+import { renderWallpaper, saveCanvas } from './lib/wallpaperPaint.js'
 
 // The Week tab (sunday-planner/DESIGN-shovel-look.md, unit 6): her week as a timeline in the look
 // of her Shovel planner, saving to plan_blocks exactly as before. Every block is as tall as its
-// real time. Three faces of ONE component:
+// real time. Two faces of ONE component:
 //   • wide screen  : an hour axis, then MON .. SUN side by side;
-//   • phone (<760) : one day at a time, day tabs plus swipe, the same timeline;
-//   • wallpaper    : the timeline only, for a 1920x1080 screenshot (the #week-wall route), and
-//                    the same picture saved as a PNG by the Wallpaper button (her ask, 27 Sep:
-//                    "download the week I am in as a png, like whenworks does").
+//   • phone (<760) : one day at a time, day tabs plus swipe, the same timeline.
+// The wallpaper (her ask, 27 Sep: "download the week I am in as a png, like whenworks does") is
+// not a third face of the page: it is DRAWN from the same placed rows by lib/wallpaper.js, at the
+// real size of her screen. The Wallpaper button saves it; the #week-wall route shows it.
 //
 // The look (her rulings, 27 Sep): uni classes and tests SOLID in the module's hub colour; her own
 // study blocks an OUTLINE with a faint fill; classes she teaches an outline in the group's colour,
@@ -202,7 +203,6 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   const [busy, setBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [shooting, setShooting] = useState(false)   // the wallpaper PNG is being made
-  const shotRef = useRef(null)
   const phoneWidth = useIsPhone()
   const isPhone = phoneWidth && !wall
   const loadSeq = useRef(0)
@@ -252,36 +252,19 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     return () => clearTimeout(t)
   }, [notice])
 
-  // Wallpaper PNG: the button mounts an off-screen 1920x1080 copy of the wallpaper for the week on
-  // screen (see the render), then this turns it into a picture and saves it to Downloads.
-  useEffect(() => {
-    if (!shooting) return
-    let gone = false
-    ;(async () => {
-      try {
-        await document.fonts.ready
-        const blob = await toBlob(shotRef.current, { width: 1920, height: 1080, pixelRatio: 1 })
-        if (gone) return
-        // A blob: link, like WhenWorks' wallpaper, not a data: link: her download manager (IDM)
-        // takes over Chrome downloads and cannot fetch a data: address, so that one errored.
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `hub-week-${monday}.png`
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        // Revoked a moment later: revoking at once can cancel the download.
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
-        setNotice('Saved to your Downloads. Right-click it and choose "Set as desktop background".')
-      } catch (e) {
-        if (!gone) setError(`Could not make the wallpaper: ${e?.message || e}`)
-      } finally {
-        if (!gone) setShooting(false)
-      }
-    })()
-    return () => { gone = true }
-  }, [shooting]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Wallpaper PNG: the week on screen, drawn at the real size of this screen, saved to Downloads.
+  async function saveWallpaper() {
+    if (shooting) return
+    setError('')
+    setShooting(true)
+    try {
+      await saveCanvas(await renderWallpaper(wallModel), wallpaperFileName(monday))
+      setNotice('Saved to your Downloads. Right-click it and choose "Set as desktop background".')
+    } catch (e) {
+      setError(`Could not make the wallpaper: ${e?.message || e}`)
+    }
+    setShooting(false)
+  }
 
   // Wallpaper: Esc (or a tap, below) goes back to the normal Week view.
   useEffect(() => {
@@ -331,6 +314,23 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
     for (const d of dates) out[d] = markers.filter((m) => m.date === d && m.untimed)
     return out
   }, [markers, dates])
+
+  // The same placed rows, as plain facts for the wallpaper (lib/wallpaper.js draws them).
+  const wallModel = useMemo(() => ({
+    title: rangeLabel(dates),
+    hours,
+    days: dates.map((d, i) => ({
+      name: DAY_SHORT[i].toUpperCase(),
+      num: parseLocalDate(d).getDate(),
+      blocks: dayData[d].placed.map((p) => ({
+        label: p.row.label, start: hm(p.row.start_time), end: hm(p.row.end_time),
+        colour: p.row.colour, solid: isSolid(p.row.type), done: p.row.type === 'own' && !!p.row.b?.done,
+        top: p.top, height: p.height, lane: p.lane, lanes: p.lanes,
+      })),
+      exams: dayData[d].exams.map((it) => ({ label: it.label, colour: it.colour })),
+      untimed: untimedByDate[d].map((m) => ({ label: m.goal.text, colour: m.goal.modules?.colour || STUDY_COLOUR })),
+    })),
+  }), [dates, hours, dayData, untimedByDate])
 
   // The panel always shows the live copy of its block (so a tick shows at once).
   const liveBlock = sheet?.block ? (blocks.find((x) => x.id === sheet.block.id) || sheet.block) : null
@@ -559,12 +559,9 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
   if (wall) {
     return (
       <div className="wk-wall" onClick={() => onExitWall && onExitWall()}>
-        <div className="wk-wall-band">
-          <div className="wk-side" aria-hidden="true">{rangeLabel(dates)}</div>
-          {week
-            ? <Timeline {...gridProps} dates={dates} wall />
-            : <div className="muted" style={{ alignSelf: 'center' }}>{status === 'loading' ? 'Loading…' : 'No copy of this week to show.'}</div>}
-        </div>
+        {week
+          ? <WallPicture model={wallModel} />
+          : <div className="muted">{status === 'loading' ? 'Loading…' : 'No copy of this week to show.'}</div>}
       </div>
     )
   }
@@ -627,20 +624,9 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
             )}
           <HoursPicker hours={hours} onChange={changeHours} />
           {!isPhone && (
-            <button className="btn small ghost" disabled={shooting} onClick={() => { setError(''); setShooting(true) }}
-              title="Save this week as a 1920x1080 picture for your desktop.">{shooting ? 'Saving…' : 'Wallpaper'}</button>
+            <button className="btn small ghost" disabled={shooting} onClick={saveWallpaper}
+              title="Save this week as a picture for your desktop, at the size of this screen.">{shooting ? 'Saving…' : 'Wallpaper'}</button>
           )}
-        </div>
-      )}
-
-      {shooting && week && (
-        <div className="wk-shot-park" aria-hidden="true">
-          <div ref={shotRef} className="wk-wall wk-shot">
-            <div className="wk-wall-band">
-              <div className="wk-side">{rangeLabel(dates)}</div>
-              <Timeline {...gridProps} dates={dates} wall />
-            </div>
-          </div>
         </div>
       )}
 
@@ -664,6 +650,27 @@ export default function WeekPlanner({ data: db, cacheId = null, wall = false, on
         <InfoView item={sheet.item} dates={dates} onClose={closeSheet} />
       )}
     </main>
+  )
+}
+
+// ---------- the wallpaper, shown (the #week-wall route) ----------
+
+// The very picture the Wallpaper button saves, fitted to the window.
+function WallPicture({ model }) {
+  const ref = useRef(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let gone = false
+    renderWallpaper(model, ref.current)
+      .then(() => { if (!gone) setError('') })
+      .catch((e) => { if (!gone) setError(`Could not draw the wallpaper: ${e?.message || e}`) })
+    return () => { gone = true }
+  }, [model])
+  return (
+    <>
+      <canvas ref={ref} className="wk-wall-pic" data-wallpaper="" />
+      {error && <div className="wk-wall-err" role="alert">{error}</div>}
+    </>
   )
 }
 
@@ -697,11 +704,11 @@ function HoursPicker({ hours, onChange }) {
   )
 }
 
-// ---------- one block on the timeline (all three faces) ----------
+// ---------- one block on the timeline ----------
 
 // As tall as its real time; overlapping blocks share the width side by side, so nothing is ever
 // folded away or drawn inside another block.
-function Ev({ p, wall, pick, onItem }) {
+function Ev({ p, pick, onItem }) {
   const it = p.row
   const b = it.b
   const cls = ['ev', isSolid(it.type) ? 'ev-solid' : 'ev-line', it.type]
@@ -719,7 +726,6 @@ function Ev({ p, wall, pick, onItem }) {
       <span className="ev-t">{timeRange(it)}</span>
     </>
   )
-  if (wall) return <div className={cls.join(' ')} style={style}>{inner}</div>
   const what = it.type === 'own' ? (pick ? 'Swap with' : 'Open') : it.type === 'nwu' ? 'NWU class' : it.type === 'uni' ? 'Your timetable' : 'Class'
   return (
     <button type="button" className={cls.join(' ')} style={style}
@@ -736,25 +742,25 @@ function Ev({ p, wall, pick, onItem }) {
 
 // Hour cells behind the blocks are the tap targets for a new block: the tap's height inside the
 // cell picks the quarter hour. Blocks sit on top, placed by lib/planner.js layoutDay.
-function DayColumn({ date, dayIdx, today, nowMin, hours, placed, readOnly, pick, hot, wall, onItem, onAdd, onHot }) {
+function DayColumn({ date, dayIdx, today, nowMin, hours, placed, readOnly, pick, hot, onItem, onAdd, onHot }) {
   const hourList = []
   for (let h = hours.start; h < hours.end; h++) hourList.push(h)
-  const addable = !wall && !readOnly && !pick
+  const addable = !readOnly && !pick
   const range = (hours.end - hours.start) * 60
-  const nowTop = date === today && !wall && nowMin >= hours.start * 60 && nowMin < hours.end * 60
+  const nowTop = date === today && nowMin >= hours.start * 60 && nowMin < hours.end * 60
     ? ((nowMin - hours.start * 60) / range) * 100 : null
   const d = parseLocalDate(date)
   return (
-    <div className={`tl-day${!wall && date === today ? ' today' : ''}`} data-day={date}>
+    <div className={`tl-day${date === today ? ' today' : ''}`} data-day={date}>
       {hourList.map((h) => {
         const key = `${date}|${h}`
         const cls = ['tl-cell']
-        if (hot === key && !wall) cls.push('hot')
+        if (hot === key) cls.push('hot')
         return (
           <div key={h} className={cls.join(' ')} data-date={date} data-hour={h}
             role={addable ? 'button' : undefined} tabIndex={addable ? 0 : undefined}
             aria-label={addable ? `${DAY_LONG[dayIdx]} ${d.getDate()}, ${pad(h)}:00: add a block` : undefined}
-            onPointerDown={wall ? undefined : () => onHot(key)}
+            onPointerDown={() => onHot(key)}
             onClick={addable ? (e) => {
               const r = e.currentTarget.getBoundingClientRect()
               const q = Math.min(3, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * 4)))
@@ -766,28 +772,28 @@ function DayColumn({ date, dayIdx, today, nowMin, hours, placed, readOnly, pick,
         )
       })}
       {nowTop != null && <div className="tl-now" style={{ top: `${nowTop}%` }} aria-hidden="true" />}
-      {placed.map((p) => <Ev key={p.row.key} p={p} wall={wall} pick={pick} onItem={onItem} />)}
+      {placed.map((p) => <Ev key={p.row.key} p={p} pick={pick} onItem={onItem} />)}
     </div>
   )
 }
 
-// ---------- the timeline: the week (wide, wallpaper) or one day (phone) ----------
+// ---------- the timeline: the week (wide) or one day (phone) ----------
 
-function Timeline({ dates, today, nowMin, hours, dayData, untimedByDate, readOnly, pick, hot, onItem, onAdd, onHot, wall = false, phone = false }) {
+function Timeline({ dates, today, nowMin, hours, dayData, untimedByDate, readOnly, pick, hot, onItem, onAdd, onHot, phone = false }) {
   const hourList = []
   for (let h = hours.start; h < hours.end; h++) hourList.push(h)
   const anyExam = dates.some((d) => dayData[d].exams.length)
   const anyUntimed = dates.some((d) => untimedByDate[d].length)
   const cols = { '--days': dates.length, '--hours': hourList.length }
   return (
-    <div className={`tl${phone ? ' phone' : ''}${wall ? ' wall' : ''}`} data-week-grid="" style={cols}>
+    <div className={`tl${phone ? ' phone' : ''}`} data-week-grid="" style={cols}>
       {!phone && (
         <div className="tl-row tl-head">
           <div className="tl-corner" />
           {dates.map((d) => {
             const i = (parseLocalDate(d).getDay() + 6) % 7
             return (
-              <div key={d} className={`tl-gh${!wall && d === today ? ' today' : ''}`} data-day-head={d}>
+              <div key={d} className={`tl-gh${d === today ? ' today' : ''}`} data-day-head={d}>
                 {DAY_SHORT[i].toUpperCase()} <small>{parseLocalDate(d).getDate()}</small>
               </div>
             )
@@ -801,13 +807,9 @@ function Timeline({ dates, today, nowMin, hours, dayData, untimedByDate, readOnl
           {dates.map((d) => (
             <div key={d} className="tl-exams" data-exams={d}>
               {dayData[d].exams.map((it) => (
-                wall
-                  ? <div key={it.key} className="ex-bar" style={lookVars(it.colour)}>{it.label}</div>
-                  : (
-                    <button key={it.key} type="button" className="ex-bar" style={lookVars(it.colour)} data-kind="exam"
-                      disabled={!!pick} aria-label={`Exam: ${it.label}`}
-                      onClick={() => onItem(it)}>{it.label}</button>
-                  )
+                <button key={it.key} type="button" className="ex-bar" style={lookVars(it.colour)} data-kind="exam"
+                  disabled={!!pick} aria-label={`Exam: ${it.label}`}
+                  onClick={() => onItem(it)}>{it.label}</button>
               ))}
             </div>
           ))}
@@ -836,7 +838,7 @@ function Timeline({ dates, today, nowMin, hours, dayData, untimedByDate, readOnl
         </div>
         {dates.map((d) => (
           <DayColumn key={d} date={d} dayIdx={(parseLocalDate(d).getDay() + 6) % 7} today={today} nowMin={nowMin}
-            hours={hours} placed={dayData[d].placed} readOnly={readOnly} pick={pick} hot={hot} wall={wall}
+            hours={hours} placed={dayData[d].placed} readOnly={readOnly} pick={pick} hot={hot}
             onItem={onItem} onAdd={onAdd} onHot={onHot} />
         ))}
       </div>
