@@ -142,6 +142,12 @@ export function isExamRow(row) {
   return !!row && row.source === 'whenworks' && String(row.source_key || '').startsWith('ww:exam:')
 }
 
+// A school period (Curro, Oct 2026), typed in by hand rather than copied from the scheduler:
+// key `curro:<date>:p<period>`. Drawn like any class she teaches, in the school colour.
+export function isSchoolRow(row) {
+  return !!row && row.source === 'whenworks' && String(row.source_key || '').startsWith('curro:')
+}
+
 // ---------- timeline (the Week view's grid since unit 6) ----------
 
 // Where each row of ONE day sits on a timeline that runs startMin..endMin: top and height as
@@ -197,6 +203,8 @@ export const GROUP_COLOURS = {
   'Graad 6': '#facc15',      // yellow
 }
 export const LEARNER_GREY = '#8a94a8'
+// Periods she teaches AT the school (her ask, 1 Oct): white, whatever the grade or label.
+export const SCHOOL_COLOUR = '#f1f5f9'
 
 // The group a label belongs to: the label IS the group name, or starts with it followed by a
 // space or punctuation ("Gr12 HSK: Maths P1" for an exam bar). Null for anything else.

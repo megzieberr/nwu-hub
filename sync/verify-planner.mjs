@@ -7,7 +7,7 @@ import {
   dueByDay, expandRepeat, swapBlocks, copyWeek, classMarkersForWeek,
   rowInHour, hourBoxes, isWholeHours, isHardDeadline,
   isExamRow, layoutDay, GROUP_COLOURS, groupColourFor, moduleForLabel, inkFor, liftForDark,
-  INK_DARK, INK_LIGHT, dropDuplicateMarkers,
+  INK_DARK, INK_LIGHT, dropDuplicateMarkers, isSchoolRow, SCHOOL_COLOUR,
 } from '../src/lib/planner.js'
 
 let pass = 0
@@ -233,6 +233,13 @@ check('liftForDark: brown is brightened', liftForDark('#b45309') !== '#b45309', 
 check('liftForDark: turquoise stays as it is', liftForDark('#34e1c8'), '#34e1c8')
 check('isExamRow: ww:exam: row', isExamRow({ source: 'whenworks', source_key: 'ww:exam:x' }), true)
 check('isExamRow: ww:own: row is not', isExamRow({ source: 'whenworks', source_key: 'ww:own:x' }), false)
+
+// ---- school periods (curro: keys, her ask 1 Oct): white, read in dark ink ----
+check('isSchoolRow: curro: row', isSchoolRow({ source: 'whenworks', source_key: 'curro:2026-10-07:p1' }), true)
+check('isSchoolRow: a scheduler class is not', isSchoolRow({ source: 'whenworks', source_key: 'ww:abc:2026-10-07' }), false)
+check('isSchoolRow: her own block is not', isSchoolRow({ source: null, source_key: null }), false)
+check('school colour reads in dark ink', inkFor(SCHOOL_COLOUR), INK_DARK)
+check('school colour is no group colour', Object.values(GROUP_COLOURS).includes(SCHOOL_COLOUR), false)
 
 // ---- one class, drawn once ----
 const mk = (id, date, start, code) => ({ goal: { id, modules: { code } }, date, start, end: start + 60, untimed: false })

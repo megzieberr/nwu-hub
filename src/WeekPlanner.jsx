@@ -5,6 +5,7 @@ import {
   localDateStr, parseLocalDate, addDays, mondayOf, weekDates, minToTime, timeToMin,
   expandRepeat, swapBlocks, copyWeek, classMarkersForWeek, isHardDeadline, isExamRow, layoutDay,
   groupColourFor, moduleForLabel, inkFor, liftForDark, LEARNER_GREY, dropDuplicateMarkers,
+  isSchoolRow, SCHOOL_COLOUR,
 } from './lib/planner.js'
 import { wallpaperFileName } from './lib/wallpaper.js'
 import { renderWallpaper, saveCanvas } from './lib/wallpaperPaint.js'
@@ -140,6 +141,7 @@ function useNowMin() {
 // 'own'   her block, editable                     → outline, module or kind colour
 // 'uni'   her own timetable row (ww:own:, a test)  → solid, module colour from its label
 // 'class' a class she teaches (from the scheduler) → solid, group colour or grey
+//         (a school period, curro: key, is white whatever its label)
 // 'exam'  a learner's exam date (ww:exam:)         → solid bar at the top of the day
 function rowType(b) {
   if (b.source == null) return 'own'
@@ -150,6 +152,7 @@ function rowType(b) {
 function blockColour(b, modById, modules) {
   const t = rowType(b)
   if (t === 'uni') return moduleForLabel(b.label, modules)?.colour || NEUTRAL_SOLID
+  if (isSchoolRow(b)) return SCHOOL_COLOUR
   if (t === 'class' || t === 'exam') return groupColourFor(b.label) || LEARNER_GREY
   const m = b.module_id && modById[b.module_id]
   if (m && m.colour) return m.colour
