@@ -10,7 +10,9 @@
 // guessed: an assessment with no weight sits in the list, never in the pie. The year figure is
 // TYPED from her record, never computed: no average across modules is worked out anywhere here.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { buildPie, wedgePath, parseMarkInput, formatNumber, ringDash, SLICE_COLOUR_COUNT } from './lib/marks'
+import {
+  buildPie, wedgePath, parseMarkInput, formatNumber, ringDash, pieLabels, SLICE_COLOUR_COUNT, LABEL_LINE_HEIGHT,
+} from './lib/marks'
 
 // The six slice colours, in slice order, the same in every module (her choice). Index = colourIndex.
 export const SLICE_COLOURS = ['#38e1ff', '#9a6bff', '#34f5c5', '#ffd166', '#ff7fc1', '#4d7cff']
@@ -209,10 +211,16 @@ export default function Marks({ db, userId }) {
 // Per slice: marked = a faint full wedge ("marks lost") with the solid wedge on top at R * fill;
 // not marked = only a dashed outline. A `gap` (weights under 100) is simply left empty. The thin
 // outer circle is a frame only, in the hub's line colour, so an empty pie still has a shape.
-function Pie({ pie, onSlice, label }) {
+//
+// Each slice carries its assessment's short name (her ask, 5 Oct): inside the slice when it fits,
+// just outside the rim in the slice's colour when the slice is too thin. The viewBox grows to hold
+// outside names and the max-width grows with it, so the circle itself stays the same size.
+function Pie({ pie, onSlice, label, big }) {
   const tap = (id) => (onSlice ? { onClick: () => onSlice(id), style: { cursor: 'pointer' } } : {})
+  const { labels, box } = useMemo(() => pieLabels(pie.slices, C, C, R), [pie.slices])
   return (
-    <svg viewBox="0 0 200 200" className="mk-pie" aria-hidden={onSlice ? 'true' : undefined}
+    <svg viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`} className="mk-pie"
+      style={{ maxWidth: box.w * (big ? 1.5 : 1) }} aria-hidden={onSlice ? 'true' : undefined}
       role={onSlice ? undefined : 'img'} aria-label={onSlice ? undefined : label}>
       <circle cx={C} cy={C} r={R} fill="none" strokeWidth="1" style={{ stroke: 'var(--line)' }} />
       {pie.slices.map((s) => {
@@ -234,6 +242,15 @@ function Pie({ pie, onSlice, label }) {
           </g>
         )
       })}
+      {labels.map((l) => (
+        <text key={l.id} x={l.x} y={l.y} textAnchor={l.anchor} data-slice-label={l.id}
+          className={l.outside ? 'mk-slice-label out' : 'mk-slice-label'}
+          style={l.outside ? { fill: SLICE_COLOURS[l.colourIndex] } : undefined}>
+          {l.lines.map((line, i) => (
+            <tspan key={i} x={l.x} dy={i ? LABEL_LINE_HEIGHT : 0}>{line}</tspan>
+          ))}
+        </text>
+      ))}
     </svg>
   )
 }
@@ -288,7 +305,7 @@ function PieSheet({ module: m, pie, editing, notice, onEdit, onSave, onClose }) 
         <button className="btn ghost mk-tap" onClick={onClose}>Close</button>
       </div>
       {notice && <p className="mk-notice" role="status">{notice}</p>}
-      <Pie pie={pie} onSlice={(id) => onEdit(id)} />
+      <Pie pie={pie} onSlice={(id) => onEdit(id)} big />
       <PieLines pie={pie} />
       {pie.gap > 0 && pie.slices.length > 0 && (
         <p className="muted text-sm mt-1">{formatNumber(pie.gap)}% of this pie has no weight yet.</p>

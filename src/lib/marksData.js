@@ -158,12 +158,12 @@ function makeDemoLayer() {
     a('m5', 'Worksheet A', null, '2026-08-14'),
     a('m5', 'Worksheet B', null, '2026-09-14'),
     // m6: six slices, so all six colours show.
-    a('m6', 'Unit 1', 10, '2026-07-28'),
-    a('m6', 'Unit 2', 15, '2026-08-11'),
-    a('m6', 'Unit 3', 15, '2026-08-25'),
-    a('m6', 'Unit 4', 20, '2026-09-08'),
-    a('m6', 'Unit 5', 20, '2026-09-22'),
-    a('m6', 'Unit 6', 20, '2026-10-06'),
+    a('m6', 'Assignment 1 · Unit 1 (made up)', 10, '2026-07-28'),
+    a('m6', 'Assignment 2 · Unit 2 (made up)', 15, '2026-08-11'),
+    a('m6', 'Assignment 3 · Unit 3 (made up)', 15, '2026-08-25'),
+    a('m6', 'Assignment 4 · Unit 4 (made up)', 20, '2026-09-08'),
+    a('m6', 'Assignment 5 · Unit 5 (made up)', 20, '2026-09-22'),
+    a('m6', 'Assignment 6 · Unit 6 (made up)', 20, '2026-10-06'),
     // hidden module: must never show.
     a('m7', 'Hidden task', 100, '2026-09-01'),
   ]
@@ -174,9 +174,9 @@ function makeDemoLayer() {
     { assessment_id: byTitle('m2', 'Essay'), mark: 65, raw: '65%' },
     { assessment_id: byTitle('m4', 'Project'), mark: 90, raw: '45/50' },
     { assessment_id: byTitle('m4', 'Reading log'), mark: 80, raw: '8/10' },
-    { assessment_id: byTitle('m6', 'Unit 1'), mark: 100, raw: '10/10' },
-    { assessment_id: byTitle('m6', 'Unit 2'), mark: 60, raw: '60' },
-    { assessment_id: byTitle('m6', 'Unit 3'), mark: 50, raw: '50' },
+    { assessment_id: byTitle('m6', 'Assignment 1 · Unit 1 (made up)'), mark: 100, raw: '10/10' },
+    { assessment_id: byTitle('m6', 'Assignment 2 · Unit 2 (made up)'), mark: 60, raw: '60' },
+    { assessment_id: byTitle('m6', 'Assignment 3 · Unit 3 (made up)'), mark: 50, raw: '50' },
   ]
   let finals = [
     { id: id('f'), kind: 'module', module_code: 'OLDA111', title: 'First module', credits: 12, semester: 1, mark: 81 },

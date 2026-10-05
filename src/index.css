@@ -300,8 +300,12 @@ h1, h2, h3, .display { font-family: 'Orbitron', sans-serif; letter-spacing: 1px;
 .mk-card:hover { border-color: var(--c); box-shadow: 0 0 18px color-mix(in srgb, var(--c) 30%, transparent); }
 .mk-code { font-family: 'Orbitron'; font-weight: 700; font-size: 13px; letter-spacing: 1px; color: var(--c); }
 .mk-name { font-weight: 700; font-size: 17px; line-height: 1.2; color: var(--c); overflow-wrap: anywhere; }
-.mk-pie { display: block; width: 100%; max-width: 200px; height: auto; margin: 8px auto 6px; }
-.mk-sheet .mk-pie { max-width: 300px; }
+.mk-pie { display: block; width: 100%; height: auto; margin: 8px auto 6px; } /* max-width is set per pie (Marks.jsx) */
+.mk-slice-label {
+  font-family: 'Rajdhani'; font-weight: 700; font-size: 12px; fill: #eaf4ff; pointer-events: none;
+  paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
+}
+.mk-slice-label.out { stroke: none; }
 .mk-lines { display: flex; flex-direction: column; gap: 2px; }
 .mk-line { font-size: 16px; font-weight: 600; color: var(--text); }
 .mk-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

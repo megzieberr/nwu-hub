@@ -2,7 +2,7 @@
 // Run: node sync/verify-marks.mjs   (exit 0 = all green)
 // Every number here is made up (public repo): ids/titles like "a1", "Task 1", "MOD101".
 import {
-  SLICE_COLOUR_COUNT, parseMarkInput, buildPie, formatNumber, wedgePath, ringDash,
+  SLICE_COLOUR_COUNT, parseMarkInput, buildPie, formatNumber, wedgePath, ringDash, shortLabel, pieLabels,
 } from '../src/lib/marks.js'
 
 let pass = 0
@@ -281,6 +281,39 @@ check('ringDash: 0 gives filled 0', ringDash(0, 10).filled, 0)
 near('ringDash: 100 fills the ring', ringDash(100, 10).filled, ringDash(100, 10).circumference)
 near('ringDash: over 100 is clamped', ringDash(140, 10).filled, ringDash(100, 10).circumference)
 check('ringDash: below 0 is clamped', ringDash(-20, 10).filled, 0)
+
+// ---- shortLabel ----
+check('label: a plain title is kept', shortLabel('Task 1'), 'Task 1')
+check('label: cut at the middle dot', shortLabel('Test 1 · Chapter 1 (opens 3 Aug)'), 'Test 1')
+check('label: cut at a long dash', shortLabel('Ass 2 — Video recording (50)'), 'Ass 2')
+check('label: cut at a bracket', shortLabel('Quiz (open book)'), 'Quiz')
+check('label: cut at a colon', shortLabel('Essay: draft one'), 'Essay')
+check('label: module code and year dropped', shortLabel('MODU 101  Assignment 1  2026 · Topic'), 'Assignment 1')
+check('label: a title that is only a code is kept', shortLabel('MODU 101 '), 'MODU 101')
+check('label: long front part is cut with an ellipsis', shortLabel('A very long assessment name here'), 'A very long asses…')
+check('label: null gives an empty string', shortLabel(null), '')
+
+// ---- pieLabels ----
+const sl = (weights, title = (i) => `Task ${i + 1}`) => {
+  let cum = 0
+  return weights.map((w, i) => {
+    const s = { id: `s${i}`, title: title(i), startAngle: cum * 3.6, endAngle: (cum + w) * 3.6, colourIndex: i % 6 }
+    cum += w
+    return s
+  })
+}
+const quarters = pieLabels(sl([25, 25, 25, 25]), 100, 100, 90)
+check('labels: one per slice', quarters.labels.length, 4)
+check('labels: short names in quarter slices all sit inside', quarters.labels.every((l) => !l.outside && l.anchor === 'middle'), true)
+check('labels: nothing outside leaves the viewBox at the plain 200 square', quarters.box, { x: 0, y: 0, w: 200, h: 200 })
+check('labels: an inside label is one line when it fits', quarters.labels[0].lines, ['Task 1'])
+const thin = pieLabels(sl([5, 95], (i) => `Assignment ${i + 1}`), 100, 100, 90)
+check('labels: a 5% slice puts its name outside', thin.labels[0].outside, true)
+check('labels: an outside name breaks at the last space', thin.labels[0].lines, ['Assignment', '1'])
+check('labels: the big slice keeps its name inside', thin.labels[1].outside, false)
+check('labels: the viewBox grows upwards for a name above the rim', thin.box.y < 0, true)
+check('labels: a whole-circle slice is labelled at the centre', pieLabels(sl([100]), 100, 100, 90).labels[0].x, 100)
+check('labels: no slices, no labels', pieLabels([], 100, 100, 90).labels, [])
 
 console.log(`${pass}/${pass + fail} checks passed`)
 process.exit(fail ? 1 : 0)

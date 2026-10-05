@@ -197,3 +197,118 @@ export function ringDash(mark, r) {
   const m = typeof mark === 'number' && Number.isFinite(mark) ? Math.min(100, Math.max(0, mark)) : 0
   return { circumference, filled: (circumference * m) / 100 }
 }
+
+// ---------- slice labels ----------
+
+// The short name drawn ON a slice: the front part of the title, before the first " · ", " — ",
+// " - ", ":" or " (". A leading module code ("MOD 101 ") and a trailing year are dropped. Nothing is
+// abbreviated or invented: "Test 1 · Chapter 1 (opens 3 Aug)" reads "Test 1". The full title stays
+// in the list under the open pie.
+const LABEL_MAX = 18
+export function shortLabel(title) {
+  const full = String(title ?? '').replace(/\s+/g, ' ').trim()
+  let t = full.split(/ [·—–-] |:| \(/)[0].trim()
+  const noCode = t.replace(/^[A-Z]{4} ?\d{3} +/, '')
+  if (noCode) t = noCode
+  const noYear = t.replace(/ +20\d\d$/, '')
+  if (noYear) t = noYear
+  if (!t) t = full
+  return t.length > LABEL_MAX ? `${t.slice(0, LABEL_MAX - 1).trimEnd()}…` : t
+}
+
+export const LABEL_FONT = 12   // px in the pie's own units (the pie is 200 across)
+const LABEL_LINE = 13          // line height
+const LABEL_CHAR = 0.52        // average glyph width of the label face, in em (checked in the browser)
+const LABEL_PAD = 3            // clear space kept between a label and its slice's edges
+const LABEL_OUT = 7            // how far past the rim an outside label starts
+
+const labelWidth = (s) => s.length * LABEL_FONT * LABEL_CHAR
+
+// One line, and (when there is a space to break at) two lines, broken at the last space.
+function lineChoices(text) {
+  const out = [[text]]
+  const at = text.lastIndexOf(' ')
+  if (at > 0) out.push([text.slice(0, at), text.slice(at + 1)])
+  return out
+}
+
+// Does a w x h box centred at (bx, by) sit wholly inside the wedge (with LABEL_PAD to spare)?
+function boxInWedge(bx, by, w, h, cx, cy, r, startAngle, endAngle) {
+  const span = endAngle - startAngle
+  const mid = (startAngle + endAngle) / 2
+  for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const x = bx + (dx * w) / 2 - cx
+    const y = by + (dy * h) / 2 - cy
+    const dist = Math.hypot(x, y)
+    if (dist > r - LABEL_PAD) return false
+    if (span >= 360 - 1e-9) continue
+    let ang = (Math.atan2(x, -y) * 180) / Math.PI   // 0 = 12 o'clock, clockwise
+    let off = Math.abs(((ang - mid + 540) % 360) - 180)
+    const inside = span / 2 - off
+    if (inside <= 0) return false
+    if (inside < 90 && dist * Math.sin((inside * Math.PI) / 180) < LABEL_PAD) return false
+  }
+  return true
+}
+
+// Where each slice's name goes. Inside the slice when it fits (one line, else two); a slice too thin
+// for its name gets the name just outside the rim instead. Returns
+//   labels: [{ id, colourIndex, lines, x, y, anchor, outside }]   y = baseline of the FIRST line,
+//           following lines sit LABEL_LINE lower; anchor = SVG text-anchor
+//   box:    { x, y, w, h }   the viewBox that holds the pie and every outside label
+export function pieLabels(slices, cx, cy, r) {
+  const labels = []
+  let x0 = cx - r - 10
+  let y0 = cy - r - 10
+  let x1 = cx + r + 10
+  let y1 = cy + r + 10
+  const firstBaseline = (centreY, n) => centreY - ((n - 1) * LABEL_LINE) / 2 + LABEL_FONT * 0.35
+
+  for (const s of slices || []) {
+    const text = shortLabel(s.title)
+    if (!text) continue
+    const span = s.endAngle - s.startAngle
+    const mid = ((s.startAngle + s.endAngle) / 2) * (Math.PI / 180)
+    const sin = Math.sin(mid)
+    const cos = Math.cos(mid)
+    const choices = lineChoices(text)
+
+    let placed = null
+    for (const lines of choices) {
+      const w = Math.max(...lines.map(labelWidth))
+      const h = lines.length * LABEL_LINE
+      const radii = span >= 360 - 1e-9 ? [0] : [0.56, 0.5, 0.62, 0.44, 0.68, 0.74].map((k) => k * r)
+      for (const rho of radii) {
+        const bx = cx + rho * sin
+        const by = cy - rho * cos
+        if (boxInWedge(bx, by, w, h, cx, cy, r, s.startAngle, s.endAngle)) {
+          placed = { lines, x: c2(bx), y: c2(firstBaseline(by, lines.length)), anchor: 'middle', outside: false }
+          break
+        }
+      }
+      if (placed) break
+    }
+
+    if (!placed) {
+      const lines = choices[choices.length - 1]
+      const w = Math.max(...lines.map(labelWidth))
+      const h = lines.length * LABEL_LINE
+      const px = cx + (r + LABEL_OUT) * sin
+      const py = cy - (r + LABEL_OUT) * cos
+      const anchor = sin > 0.35 ? 'start' : sin < -0.35 ? 'end' : 'middle'
+      // Stacked away from the rim: upwards in the top half, downwards in the bottom half, centred
+      // on the point exactly at the sides.
+      const centreY = py - (cos * h) / 2
+      const left = anchor === 'start' ? px : anchor === 'end' ? px - w : px - w / 2
+      x0 = Math.min(x0, left - 4)
+      x1 = Math.max(x1, left + w + 4)
+      y0 = Math.min(y0, centreY - h / 2 - 3)
+      y1 = Math.max(y1, centreY + h / 2 + 3)
+      placed = { lines, x: c2(px), y: c2(firstBaseline(centreY, lines.length)), anchor, outside: true }
+    }
+    labels.push({ id: s.id, colourIndex: s.colourIndex, ...placed })
+  }
+  return { labels, box: { x: c2(x0), y: c2(y0), w: c2(x1 - x0), h: c2(y1 - y0) } }
+}
+
+export const LABEL_LINE_HEIGHT = LABEL_LINE
