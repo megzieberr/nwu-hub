@@ -6,7 +6,11 @@ import { pushState, enablePush, disablePush } from './lib/push'
 // Quest Log retired s19 (Megan: "My Week is better") — its both-ends window semantics live on
 // inside lib/week.js's myWeek (overdue grace included). questWindow stays in lib/quests.js, tested
 // but unrendered, in case she ever wants the full window back.
-import { myWeek, weekAhead, dueLabel, formatDue } from './lib/week'
+import { dueLabel, formatDue } from './lib/week'
+// Own ticks (0024): the owner's done-state is assessments.status, the viewer's is her my_done rows.
+// myWeek and weekAhead are reached through these wrappers, which hand the owner's rows through
+// untouched and swap in the viewer's own state for her.
+import { isDoneFor, visibleDeadlinesFor, weekAheadFor } from './lib/done'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
 import SyncHealth from './SyncHealth'
@@ -15,9 +19,12 @@ import { ping, pingMuted, setPingMuted } from './lib/ping'
 import * as pen from './lib/pen'
 import WeekPlanner from './WeekPlanner'
 import { plannerDb, getDemoLayer } from './lib/plannerData'
+import Marks from './Marks'
+import { marksDb, getMarksDemoLayer } from './lib/marksData'
 
-// Week tab deep links (#week, #week-wall). The module page is not hash-routed.
-const WEEK_VIEWS = { '#week': 'week', '#week-wall': 'week-wall' }
+// Hash-routed tabs: the Week tab (#week, #week-wall) and the Marks tab (#marks). The module page
+// is not hash-routed.
+const WEEK_VIEWS = { '#week': 'week', '#week-wall': 'week-wall', '#marks': 'marks' }
 const weekViewFromHash = () => ({ name: WEEK_VIEWS[window.location.hash] || 'dashboard' })
 
 export default function App() {
@@ -68,6 +75,10 @@ export default function App() {
           onExitWall={() => { window.location.hash = '#week-demo' }} />
       )
     }
+    // DEV ONLY: the Marks tab on made-up modules and marks, in memory, no login, no network.
+    if (hash === '#marks-demo') {
+      return <MarksScreen db={getMarksDemoLayer()} userId="demo" onBack={() => { window.location.hash = '' }} />
+    }
   }
 
   if (loading) return <Centered>Loading…</Centered>
@@ -83,9 +94,13 @@ export default function App() {
           onBack={() => { history.replaceState(null, '', window.location.pathname + window.location.search); setView({ name: 'dashboard' }) }}
           onOpenWall={() => { window.location.hash = '#week-wall' }}
           onExitWall={() => { window.location.hash = '#week' }} />
+      ) : view.name === 'marks' ? (
+        <MarksScreen db={marksDb} userId={session.user.id}
+          onBack={() => { history.replaceState(null, '', window.location.pathname + window.location.search); setView({ name: 'dashboard' }) }} />
       ) : (
         <Dashboard isViewer={isViewer} userId={session.user.id} onOpenModule={(code) => setView({ name: 'module', code })}
-          onOpenWeek={() => { window.location.hash = '#week' }} />
+          onOpenWeek={() => { window.location.hash = '#week' }}
+          onOpenMarks={() => { window.location.hash = '#marks' }} />
       )}
       {/* The Tests & Exams bubble rides above every view. Lize (viewer) sees the codes too — they're
           class-wide — but read-only: no add/fix, no editing (enforced by RLS and hidden in the UI).
@@ -102,6 +117,16 @@ function WeekScreen({ wall, db, cacheId, onBack, onOpenWall, onExitWall }) {
     <div className="min-h-screen">
       <Header onBack={onBack}><PingToggle /></Header>
       <WeekPlanner data={db} cacheId={cacheId} onOpenWall={onOpenWall} />
+    </div>
+  )
+}
+
+// The Marks tab with the hub header. Same tab for both accounts: each sees only her own marks.
+function MarksScreen({ db, userId, onBack }) {
+  return (
+    <div className="min-h-screen mk-screen">
+      <Header onBack={onBack}><PingToggle /></Header>
+      <Marks db={db} userId={userId} />
     </div>
   )
 }
@@ -266,10 +291,11 @@ function Login() {
   )
 }
 
-function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
+function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) {
   const [name, setName] = useState('')
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
+  const [doneIds, setDoneIds] = useState(() => new Set())  // viewer only: her own my_done ticks
   const [goals, setGoals] = useState([])
   const [showDone, setShowDone] = useState(false)
   const [justDone, setJustDone] = useState(null)   // last deadline ticked off — holds the undo line
@@ -279,10 +305,19 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setName(data.user?.email?.split('@')[0] || 'Student'))
     ;(async () => {
-      const [m, a] = await Promise.all([
+      // The owner's deadlines are filtered on her own status, as always. The viewer's are NOT:
+      // that status is the owner's, so the viewer gets every row and her own my_done ticks decide
+      // what drops off (visibleDeadlinesFor, below). The past stays bounded by myWeek's own window.
+      let aq = supabase.from('assessments').select('*, modules(code,colour,hidden)')
+      if (!isViewer) aq = aq.eq('status', 'upcoming')
+      const [m, a, md] = await Promise.all([
         supabase.from('modules').select('*').order('code'),
-        supabase.from('assessments').select('*, modules(code,colour,hidden)').eq('status', 'upcoming').order('due_date'),
+        aq.order('due_date'),
+        // RLS (0024) hands each account only her own rows. Before 0024 is applied this is an error
+        // object, not a throw, and the viewer simply has no ticks yet.
+        isViewer ? supabase.from('my_done').select('assessment_id') : Promise.resolve({ data: [] }),
       ])
+      setDoneIds(new Set((md.data || []).map((r) => r.assessment_id)))
       if (m.error) setError(m.error.message)
       // Hidden modules still sync (their announcements feed the objectives agent) but get no
       // dashboard tile — drop them here so both the grid and the module count skip them.
@@ -318,8 +353,9 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
 
   // My Week: at most one upcoming line per module (its next deadline) plus a red line for a
   // just-missed one (4-day grace, inherited from the retired Quest Log). Hidden modules are
-  // already filtered out of `deadlines`.
-  const myWeekRows = myWeek(deadlines)
+  // already filtered out of `deadlines`. For the owner this is myWeek(deadlines), unchanged; for
+  // the viewer, the rows she ticked herself drop off and the owner's status plays no part.
+  const myWeekRows = visibleDeadlinesFor(deadlines, { isViewer, doneIds })
 
   // Classes are agent-tagged goals (kind='class'), shown on their own and scoped to ONE week (Mon–Sun)
   // — the home screen shows what's on now, not the whole semester. A one-off class shows only in the
@@ -352,7 +388,7 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
   // already holds UPDATE on all 15 columns, and `hub_write` gates it to the owner (a viewer's tick
   // would be refused by RLS anyway — the button is hidden for them regardless).
   //
-  // The dashboard only ever fetches status='upcoming' (and myWeek now drops non-upcoming rows too),
+  // The owner's dashboard only ever fetches status='upcoming' (and myWeek drops non-upcoming rows),
   // so a ticked item leaves the card at once. `justDone` keeps ONE undo line on screen afterwards:
   // without it, a mis-tap could only be fixed by walking into the module page, and the row that
   // vanished would be a missed deadline she still needs. The sync can't resurrect it either —
@@ -483,6 +519,20 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="section-label">Week</div>
             <div className="text-sm muted mt-1">Plan your study blocks and tick them off.</div>
+          </div>
+          <span className="mono muted" style={{ flex: '0 0 auto' }}>OPEN →</span>
+        </button>
+
+        {/* Marks entry, right under Week (both accounts; each sees only her own marks). */}
+        <button onClick={onOpenMarks} className="panel bracket p-5 flex items-center gap-4 wk-entry">
+          <div style={{
+            width: 44, height: 44, borderRadius: 12, flex: '0 0 auto', fontSize: 22,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '2px solid var(--cyan)', background: 'rgba(2,8,22,.5)',
+          }}>📊</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="section-label">Marks</div>
+            <div className="text-sm muted mt-1">Your marks per module, and your year.</div>
           </div>
           <span className="mono muted" style={{ flex: '0 0 auto' }}>OPEN →</span>
         </button>
@@ -822,6 +872,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [units, setUnits] = useState([])
   const [summaries, setSummaries] = useState([])
   const [assessments, setAssessments] = useState([])
+  const [doneIds, setDoneIds] = useState(() => new Set())  // viewer only: her own my_done ticks
   const [resources, setResources] = useState([])
   const [papers, setPapers] = useState([])
   const [parts, setParts] = useState([])
@@ -860,6 +911,12 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       setResources(res.data || [])
       setPapers(pp.data || [])
       setStudyLog(sl.data || [])
+      // The viewer's own ticks (0024). RLS gives each account only her own rows; before 0024 is
+      // applied this is an error object, not a throw, and she simply has no ticks yet.
+      if (isViewer) {
+        const { data: md } = await supabase.from('my_done').select('assessment_id')
+        setDoneIds(new Set((md || []).map((r) => r.assessment_id)))
+      }
       const pmap = {}
       ;(profs.data || []).forEach((p) => { pmap[p.id] = p })
       setProfiles(pmap)
@@ -870,7 +927,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         setParts(partData || [])
       }
     })()
-  }, [code])
+  }, [code, isViewer])
 
   if (!mod) return (
     <div className="min-h-screen"><Header onBack={onBack} />
@@ -896,6 +953,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // undo line; THIS list shows every assessment whatever its status, so a tick made days ago is
   // still findable and reversible here. Optimistic, with a revert on failure.
   async function toggleAssessment(a) {
+    if (isViewer) return toggleMine(a)
     const status = a.status === 'upcoming' ? 'submitted' : 'upcoming'
     if (status === 'submitted') ping()  // not on the ↺ — see toggleGoal
     setStatusError('')
@@ -904,6 +962,34 @@ function ModulePage({ code, isViewer, userId, onBack }) {
     if (e) {
       setAssessments((as) => as.map((x) => (x.id === a.id ? { ...x, status: a.status } : x)))
       setStatusError('Could not save that — ' + e.message)
+    }
+  }
+
+  // The viewer's tick (0024). Her done-state is a my_done row of her own: tick = insert it,
+  // untick = delete it. The shared assessment row is never written. Same feel as the owner's tick:
+  // optimistic, the ping only on the way in, and a rollback if the save fails.
+  async function toggleMine(a) {
+    const wasDone = doneIds.has(a.id)
+    if (!wasDone) ping()  // not on the untick, see toggleGoal
+    setStatusError('')
+    const flip = (on) => setDoneIds((s) => {
+      const n = new Set(s)
+      if (on) n.add(a.id); else n.delete(a.id)
+      return n
+    })
+    flip(!wasDone)
+    let e
+    if (wasDone) {
+      ;({ error: e } = await supabase.from('my_done').delete()
+        .eq('assessment_id', a.id).eq('owner', userId))
+    } else {
+      ;({ error: e } = await supabase.from('my_done').insert({ owner: userId, assessment_id: a.id }))
+      // 23505 = the row is already there (a quick second tap): ticked is what she wanted.
+      if (e && e.code === '23505') e = null
+    }
+    if (e) {
+      flip(wasDone)
+      setStatusError('Could not save that: ' + e.message)
     }
   }
 
@@ -936,7 +1022,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
         {(() => {
           // This Week card — the one question the page should answer first: "what do I do now?"
           // Hidden entirely when the module has no dated upcoming assessments at all.
-          const wk = weekAhead(assessments)
+          const wk = weekAheadFor(assessments, { isViewer, doneIds })
           if (!wk.thisWeek.length && !wk.next) return null
           return (
             <div className="panel bracket p-4" style={{ '--accent': accent }}>
@@ -1031,7 +1117,8 @@ function ModulePage({ code, isViewer, userId, onBack }) {
           <div className="space-y-3">
             {assessments.map((a) => {
               const briefs = briefsFor(a.id)
-              const done = a.status !== 'upcoming'
+              // Owner: her status, as before. Viewer: her own my_done row only.
+              const done = isDoneFor(a, { isViewer, doneIds })
               return (
                 <div key={a.id} className="panel p-4" style={done ? { opacity: 0.55 } : undefined}>
                   <div className="flex items-center gap-3" style={{ flexWrap: 'wrap', rowGap: 6 }}>
@@ -1039,16 +1126,14 @@ function ModulePage({ code, isViewer, userId, onBack }) {
                       textDecoration: done ? 'line-through' : 'none' }}>{a.title}</span>
                     <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>{a.due_date || 'date TBC'}</span>
-                      {/* Tick / untick. Hidden for the viewer (Lize) — hub_write would refuse it
-                          anyway, so showing the button would only ever produce an error. */}
-                      {!isViewer && (
-                        <button onClick={() => toggleAssessment(a)} className="icon-btn"
-                          aria-label={done ? `Put ${a.title} back on the list` : `Mark ${a.title} as done`}
-                          title={done ? 'Put it back on the list' : 'Mark as done'}
-                          style={{ padding: 0, width: 38, justifyContent: 'center', fontSize: 15,
-                            color: done ? 'var(--cyan)' : 'var(--muted)',
-                            borderColor: done ? 'var(--cyan)' : 'var(--line)' }}>{done ? '↺' : '✓'}</button>
-                      )}
+                      {/* Tick / untick, for both accounts. The owner's writes assessments.status;
+                          the viewer's writes her own my_done row (toggleAssessment picks). */}
+                      <button onClick={() => toggleAssessment(a)} className="icon-btn"
+                        aria-label={done ? `Put ${a.title} back on the list` : `Mark ${a.title} as done`}
+                        title={done ? 'Put it back on the list' : 'Mark as done'}
+                        style={{ padding: 0, width: 38, justifyContent: 'center', fontSize: 15,
+                          color: done ? 'var(--cyan)' : 'var(--muted)',
+                          borderColor: done ? 'var(--cyan)' : 'var(--line)' }}>{done ? '↺' : '✓'}</button>
                     </span>
                   </div>
                   {briefs.length > 0 && (

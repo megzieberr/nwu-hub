@@ -13,8 +13,14 @@
    caller.
 
    TABLES THIS FUNCTION MAY TOUCH: profiles (display_name only), modules, study_units, assessments,
-   resources, summaries, past_papers, exam_access, tutor_docs, goals, study_log, and the private
-   `resources` storage bucket (signed URLs only).
+   resources, summaries, past_papers, exam_access, tutor_docs, goals, study_log, my_done (read
+   only, kind 2), and the private `resources` storage bucket (signed URLs only).
+
+   OWN TICKS. `assessments.status` is the hub owner's done-state on the shared row, so it is never
+   selected here. Each assessment's `status` in a reply is the TOKEN HOLDER's own state, built from
+   her my_done rows (0024): 'done' if she has ticked it, otherwise 'upcoming'. The owner's
+   'submitted' / 'graded' never leave this function. my_done is read with `owner = uid` named
+   explicitly, because the service role bypasses RLS.
 
    TABLES IT MAY NEVER TOUCH, named here so a future edit does not quietly add one: announcements,
    summary_notes, push_subscriptions, efundi_site_map, efundi_sync_runs, project_parts,
@@ -60,6 +66,7 @@ const EXAM_ACCESS_MAX = 30;
 const SCHEDULE_MAX = 30;
 const SCHEDULE_BACK_DAYS = 2;     // a class two days old is still worth reading out
 const MY_TODO_MAX = 60;
+const MY_DONE_MAX = 1000;         // one row per assessment she has ticked; the hub has far fewer
 const STUDY_LOG_DAYS = 21;
 const STUDY_LOG_MAX = 40;
 const MODULE_LIST_MAX = 400;      // resources/summaries per module; true totals come from count
@@ -91,6 +98,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Row = Record<string, any>;
+
+/* The token holder's own state for one assessment (see OWN TICKS in the header). */
+function ownStatus(doneIds: Set<string>, assessmentId: unknown): "done" | "upcoming" {
+  return doneIds.has(String(assessmentId)) ? "done" : "upcoming";
+}
+function doneSetOf(rows: Row[] | null | undefined): Set<string> {
+  return new Set((rows ?? []).map((r: Row) => String(r.assessment_id)));
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -248,14 +263,15 @@ Deno.serve(async (req: Request) => {
         const scheduleFloor = sastDayShift(now, -SCHEDULE_BACK_DAYS);
         const inScope = `(${moduleIds.join(",")})`;
 
-        const [learnerRes, unitRes, assessRes, examRes, schedRes, todoRes, logRes] = await Promise.all([
+        const [learnerRes, unitRes, assessRes, examRes, schedRes, todoRes, logRes, doneRes] = await Promise.all([
           admin.from("profiles").select("display_name").eq("id", uid).maybeSingle(),
           /* Units are curriculum-sized (tens of rows, added by hand), so reading them is safe under
              PostgREST's 1000-row ceiling. The three that grow on their own — resources, summaries,
              tutor_docs — are counted in the database instead, below. */
           admin.from("study_units").select("module_id,status")
             .eq("owner", ownerId).in("module_id", moduleIds),
-          admin.from("assessments").select("module_id,title,type,due_date,weight_pct,status")
+          /* No `status`: that is the owner's. `id` is read only to match her own my_done rows. */
+          admin.from("assessments").select("id,module_id,title,type,due_date,weight_pct")
             .eq("owner", ownerId).in("module_id", moduleIds)
             .gte("due_date", today)
             .order("due_date", { ascending: true })
@@ -283,11 +299,16 @@ Deno.serve(async (req: Request) => {
             .eq("owner", uid).gte("studied_at", sinceLog)
             .order("studied_at", { ascending: false })
             .limit(STUDY_LOG_MAX),
+          /* Kind (2): her own ticks, pinned to uid by hand (the service role bypasses RLS). */
+          admin.from("my_done").select("assessment_id")
+            .eq("owner", uid)
+            .limit(MY_DONE_MAX),
         ]);
 
-        const firstErr = [learnerRes, unitRes, assessRes, examRes, schedRes, todoRes, logRes]
+        const firstErr = [learnerRes, unitRes, assessRes, examRes, schedRes, todoRes, logRes, doneRes]
           .find((r: Row) => r.error);
         if (firstErr?.error) throw firstErr.error;
+        const doneIds = doneSetOf(doneRes.data);
 
         /* Three exact counts per module, done in the database. Selecting the rows and counting them
            here would silently undercount the moment a module passes PostgREST's 1000-row cap —
@@ -339,7 +360,7 @@ Deno.serve(async (req: Request) => {
             type: a.type,
             due_date: a.due_date,
             weight_pct: a.weight_pct,
-            status: a.status,
+            status: ownStatus(doneIds, a.id),  // hers, never the owner's (see OWN TICKS)
           })),
           deadlines_truncated: futureAssessments.length > DEADLINES_MAX
             ? `showing the next ${DEADLINES_MAX} of ${futureAssessments.length} dated items`
@@ -392,12 +413,12 @@ Deno.serve(async (req: Request) => {
            that it exists. */
         if (!mod) return fail("That module is not in this window.", 404);
 
-        const [unitRes, assessRes, sumRes, resRes, paperRes, docRes] = await Promise.all([
+        const [unitRes, assessRes, sumRes, resRes, paperRes, docRes, doneRes] = await Promise.all([
           admin.from("study_units").select("id,number,title,status,notes")
             .eq("owner", ownerId).eq("module_id", mod.id)
             .order("number", { ascending: true }),
-          /* No `mark`. Never `mark`. */
-          admin.from("assessments").select("id,title,type,due_date,weight_pct,status")
+          /* No `mark`. Never `mark`. No `status` either: that is the owner's (see OWN TICKS). */
+          admin.from("assessments").select("id,title,type,due_date,weight_pct")
             .eq("owner", ownerId).eq("module_id", mod.id)
             .order("due_date", { ascending: true, nullsFirst: false }),
           /* html is read only to measure it; the body itself comes from ?action=summary. */
@@ -418,11 +439,16 @@ Deno.serve(async (req: Request) => {
             .in("owner", ownerIds).eq("module_id", mod.id)
             .order("created_at", { ascending: false })
             .limit(MODULE_LIST_MAX),
+          /* Kind (2): her own ticks, pinned to uid by hand (the service role bypasses RLS). */
+          admin.from("my_done").select("assessment_id")
+            .eq("owner", uid)
+            .limit(MY_DONE_MAX),
         ]);
 
-        const firstErr = [unitRes, assessRes, sumRes, resRes, paperRes, docRes]
+        const firstErr = [unitRes, assessRes, sumRes, resRes, paperRes, docRes, doneRes]
           .find((r: Row) => r.error);
         if (firstErr?.error) throw firstErr.error;
+        const doneIds = doneSetOf(doneRes.data);
 
         const units: Row[] = unitRes.data ?? [];
         const unitNumber = new Map<string, number>(
@@ -446,7 +472,8 @@ Deno.serve(async (req: Request) => {
           })),
           assessments: (assessRes.data ?? []).map((a: Row) => ({
             id: a.id, title: a.title, type: a.type,
-            due_date: a.due_date, weight_pct: a.weight_pct, status: a.status,
+            due_date: a.due_date, weight_pct: a.weight_pct,
+            status: ownStatus(doneIds, a.id),  // hers, never the owner's (see OWN TICKS)
           })),
           summaries: (sumRes.data ?? []).map((s: Row) => ({
             id: s.id,
