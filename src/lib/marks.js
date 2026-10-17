@@ -141,6 +141,7 @@ export function buildPie(assessments, marks, module) {
     return {
       id: a.id,
       title: a.title,
+      label: shortLabel(a.title, module ? module.code : null), // the name drawn on the slice
       weight: a.weight_pct,
       share,
       startAngle,
@@ -210,17 +211,24 @@ export function ringDash(mark, r) {
 // ---------- slice labels ----------
 
 // The short name drawn ON a slice: the front part of the title, before the first " · ", " — ",
-// " - ", ":" or " (". A leading module code ("MOD 101 ") and a trailing year are dropped. Nothing is
-// abbreviated or invented: "Test 1 · Chapter 1 (opens 3 Aug)" reads "Test 1". The full title stays
+// " - ", ":" or " (". A leading module code ("MOD 101 ") and a trailing year are dropped. The only
+// abbreviations are "Assignment N" / "Ass N" -> "AN" and, in SHORT_TEST_NAMES modules only, "Test N" ->
+// "TN"; nothing else is shortened or invented: "Test 1 · Chapter 1 (opens 3 Aug)" reads "Test 1". The full title stays
 // in the list under the open pie.
 const LABEL_MAX = 18
-export function shortLabel(title) {
+export const SHORT_TEST_NAMES = new Set(['EDCC125'])
+export function shortLabel(title, moduleCode = null) {
   const full = String(title ?? '').replace(/\s+/g, ' ').trim()
   let t = full.split(/ [·—–-] |:| \(/)[0].trim()
   const noCode = t.replace(/^[A-Z]{4} ?\d{3} +/, '')
   if (noCode) t = noCode
   const noYear = t.replace(/ +20\d\d$/, '')
   if (noYear) t = noYear
+  // "Assignment 3" / "Ass 3" read "A3" everywhere, the way ALDE's titles already do; "Test 3" reads
+  // "T3" only in SHORT_TEST_NAMES modules (her rulings 2026-10-17: ENGV + SECL, EDCC; MATH keeps
+  // "Test 1").
+  t = t.replace(/^Ass(?:ignment)? +(\d+)$/i, 'A$1')
+  if (SHORT_TEST_NAMES.has(moduleCode)) t = t.replace(/^Test +(\d+)$/i, 'T$1')
   if (!t) t = full
   return t.length > LABEL_MAX ? `${t.slice(0, LABEL_MAX - 1).trimEnd()}…` : t
 }
@@ -260,8 +268,27 @@ function boxInWedge(bx, by, w, h, cx, cy, r, startAngle, endAngle) {
   return true
 }
 
+// The first spot inside slice s where its name fits (one line, else two), as { lines, bx, by } with
+// (bx, by) the centre of the text box; null when the name fits nowhere inside.
+function insideSpot(s, text, cx, cy, r) {
+  const span = s.endAngle - s.startAngle
+  const mid = ((s.startAngle + s.endAngle) / 2) * (Math.PI / 180)
+  const radii = span >= 360 - 1e-9 ? [0] : [0.56, 0.5, 0.62, 0.44, 0.68, 0.74].map((k) => k * r)
+  for (const lines of lineChoices(text)) {
+    const w = Math.max(...lines.map(labelWidth))
+    const h = lines.length * LABEL_LINE
+    for (const rho of radii) {
+      const bx = cx + rho * Math.sin(mid)
+      const by = cy - rho * Math.cos(mid)
+      if (boxInWedge(bx, by, w, h, cx, cy, r, s.startAngle, s.endAngle)) return { lines, bx, by }
+    }
+  }
+  return null
+}
+
 // Where each slice's name goes. Inside the slice when it fits (one line, else two); a slice too thin
-// for its name gets the name just outside the rim instead. Returns
+// for its name gets the name just outside the rim instead, and so does every slice the same size.
+// Returns
 //   labels: [{ id, colourIndex, lines, x, y, anchor, outside }]   y = baseline of the FIRST line,
 //           following lines sit LABEL_LINE lower; anchor = SVG text-anchor
 //   box:    { x, y, w, h }   the viewBox that holds the pie and every outside label
@@ -273,32 +300,31 @@ export function pieLabels(slices, cx, cy, r) {
   let y1 = cy + r + 10
   const firstBaseline = (centreY, n) => centreY - ((n - 1) * LABEL_LINE) / 2 + LABEL_FONT * 0.35
 
+  // Slices of the same size are labelled the same way: when one of them has to put its name outside,
+  // they all do (her ruling 2026-10-17, EDCC's four 10% tests read 3 outside + 1 inside).
+  const sameSize = (a, b) => Math.abs((a.endAngle - a.startAngle) - (b.endAngle - b.startAngle)) < 1e-6
+  const forced = new Set()
   for (const s of slices || []) {
-    const text = shortLabel(s.title)
+    const text = s.label ?? shortLabel(s.title)
+    if (text && !insideSpot(s, text, cx, cy, r)) {
+      for (const t of slices) if (sameSize(s, t)) forced.add(t.id)
+    }
+  }
+
+  for (const s of slices || []) {
+    const text = s.label ?? shortLabel(s.title)
     if (!text) continue
-    const span = s.endAngle - s.startAngle
     const mid = ((s.startAngle + s.endAngle) / 2) * (Math.PI / 180)
     const sin = Math.sin(mid)
     const cos = Math.cos(mid)
     const choices = lineChoices(text)
 
     let placed = null
-    for (const lines of choices) {
-      const w = Math.max(...lines.map(labelWidth))
-      const h = lines.length * LABEL_LINE
-      const radii = span >= 360 - 1e-9 ? [0] : [0.56, 0.5, 0.62, 0.44, 0.68, 0.74].map((k) => k * r)
-      for (const rho of radii) {
-        const bx = cx + rho * sin
-        const by = cy - rho * cos
-        if (boxInWedge(bx, by, w, h, cx, cy, r, s.startAngle, s.endAngle)) {
-          placed = { lines, x: c2(bx), y: c2(firstBaseline(by, lines.length)), anchor: 'middle', outside: false }
-          break
-        }
-      }
-      if (placed) break
-    }
-
-    if (!placed) {
+    const inside = forced.has(s.id) ? null : insideSpot(s, text, cx, cy, r)
+    if (inside) {
+      const { lines, bx, by } = inside
+      placed = { lines, x: c2(bx), y: c2(firstBaseline(by, lines.length)), anchor: 'middle', outside: false }
+    } else {
       const lines = choices[choices.length - 1]
       const w = Math.max(...lines.map(labelWidth))
       const h = lines.length * LABEL_LINE
