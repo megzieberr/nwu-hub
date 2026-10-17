@@ -203,6 +203,37 @@ check('no weighted rows: empty pie', buildPie([A('g1', 'Task', '2026-03-01', nul
 check('no assessments at all', buildPie([], [], MOD(null)), { slices: [], unweighted: [], average: null, banked: 0, scale: 1, gap: 100 })
 check('exam-only module', buildPie([A('h1', 'Exam', null, 100, 'exam')], [], MOD(null)).slices, [])
 
+// ---- EDCC125: the whole module, exam as a slice (her ruling 2026-10-17) ----
+// Four tests at 10 + the exam at 60, participation 40. Marks 80, 70, 90, 60 on the tests, exam not
+// written yet: slices 10/10/10/10/60, exam last and empty; banked = 8 + 7 + 9 + 6 = 30 of 100.
+const edcc = [
+  A('k1', 'Test 1', '2026-10-10', 10, 'test'),
+  A('k2', 'Test 2', '2026-10-10', 10, 'test'),
+  A('k3', 'Test 3', '2026-10-10', 10, 'test'),
+  A('k4', 'Test 4', '2026-10-10', 10, 'test'),
+  A('kx', 'Exam', '2026-11-06', 60, 'exam'),
+]
+const edccMarks = [M('k1', 80), M('k2', 70), M('k3', 90), M('k4', 60)]
+const pe = buildPie(edcc, edccMarks, { code: 'EDCC125', participation_pct: 40 })
+check('edcc: the exam is a slice, last', pe.slices.map((s) => s.id), ['k1', 'k2', 'k3', 'k4', 'kx'])
+check('edcc: shares 10/10/10/10/60', pe.slices.map((s) => s.share), [10, 10, 10, 10, 60])
+check('edcc: no gap, scale 1', [pe.gap, pe.scale], [0, 1])
+check('edcc: the exam starts empty', pe.slices[4].mark, null)
+check('edcc: the exam slice closes the circle', pe.slices[4].endAngle, 360)
+near('edcc: average on the marked tests 75', pe.average, 75)
+near('edcc: banked 30 of 100', pe.banked, 30)
+const peDone = buildPie(edcc, [...edccMarks, M('kx', 50)], { code: 'EDCC125', participation_pct: 40 })
+near('edcc: an exam mark counts once written', peDone.banked, 60)
+check('edcc: an unweighted exam still stays out',
+  buildPie([...edcc.slice(0, 4), A('kx', 'Exam', '2026-11-06', null, 'exam')], edccMarks, { code: 'EDCC125', participation_pct: 40 }).slices.map((s) => s.id),
+  ['k1', 'k2', 'k3', 'k4'])
+check('edcc: an unweighted exam is not listed either',
+  buildPie([...edcc.slice(0, 4), A('kx', 'Exam', '2026-11-06', null, 'exam')], edccMarks, { code: 'EDCC125', participation_pct: 40 }).unweighted, [])
+// MATH121 / MATV121 store an exam weight too, but their pies stay participation-only.
+const pmath = buildPie(finalShare, [], { code: 'MATH121', participation_pct: 50 })
+check('math121: the weighted exam stays out', pmath.slices.map((s) => s.id), ['c1', 'c2', 'c3'])
+check('math121: shares still 40/40/20', pmath.slices.map((s) => s.share), [40, 40, 20])
+
 // ---- a mark of 0 is a mark ----
 const pz = buildPie([A('z1', 'T1', '2026-03-01', 50), A('z2', 'T2', '2026-03-02', 50)], [M('z1', 0, '0'), M('z2', 100)], MOD(null))
 check('zero: fill is 0, not null', pz.slices[0].fill, 0)

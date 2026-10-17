@@ -2,7 +2,10 @@
 // into one participation pie. No Supabase, no DOM, no React, no clock: sync/verify-marks.mjs runs
 // this under plain Node.
 //
-// One pie per module, for the PARTICIPATION mark only (exams are left out of everything here).
+// One pie per module, for the PARTICIPATION mark only (exams are left out of everything here),
+// except the modules in EXAM_IN_PIE: their pie is the WHOLE module, and an exam with a weight is
+// one more slice (EDCC125: four tests at 10 + the exam at 60, her ruling 2026-10-17; MATH121 and
+// MATV121 stay participation-only even though their exam weights are stored).
 //   - slice WIDTH  = the assessment's weight, as a share of the whole circle;
 //   - slice FILL   = the mark, filling from the centre outwards. The coloured AREA must match the
 //     mark, so the fill radius is R * sqrt(mark / 100) — `fill` below is that sqrt (0 to 1);
@@ -74,6 +77,9 @@ function byDueTitleId(a, b) {
 
 const isWeight = (w) => typeof w === 'number' && Number.isFinite(w) && w > 0
 
+// Modules whose pie shows the whole module, exam included (see the top of this file).
+export const EXAM_IN_PIE = new Set(['EDCC125'])
+
 // Returns { slices, unweighted, average, banked, scale, gap }.
 //
 // scale — what the stored weights are multiplied by to become a share of the circle:
@@ -96,7 +102,10 @@ export function buildPie(assessments, marks, module) {
     return m && typeof m.mark === 'number' && Number.isFinite(m.mark) ? m : null
   }
 
-  const rows = (assessments || []).filter((a) => a && a.type !== 'exam').slice().sort(byDueTitleId)
+  // A weighted exam joins the pie only in an EXAM_IN_PIE module; an unweighted exam never shows.
+  const examIn = !!(module && EXAM_IN_PIE.has(module.code))
+  const keep = (a) => a && (a.type !== 'exam' || (examIn && isWeight(a.weight_pct)))
+  const rows = (assessments || []).filter(keep).slice().sort(byDueTitleId)
   const weighted = rows.filter((a) => isWeight(a.weight_pct))
   const unweighted = rows
     .filter((a) => !isWeight(a.weight_pct))
