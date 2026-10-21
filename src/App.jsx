@@ -21,7 +21,7 @@ import WeekPlanner from './WeekPlanner'
 import { plannerDb, getDemoLayer } from './lib/plannerData'
 import Marks from './Marks'
 import { marksDb, getMarksDemoLayer } from './lib/marksData'
-import { splitFolded, buildTrainingGrounds, pickPaperTab } from './lib/shelf'
+import { splitFolded, buildTrainingGrounds, pickPaperTab, paperLabel } from './lib/shelf'
 
 // Hash-routed tabs: the Week tab (#week, #week-wall) and the Marks tab (#marks). The module page
 // is not hash-routed.
@@ -883,6 +883,8 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [showKit, setShowKit] = useState(false)
   // Study units whose folded docs (van Hiele, see lib/shelf.js) she has opened this visit.
   const [unfolded, setUnfolded] = useState(() => new Set())
+  // Headings she has folded closed (Study Unit 1, Course PDFs …), remembered on this device.
+  const [folds, toggleFold] = useFolds()
   const [loadError, setLoadError] = useState('')
   const [statusError, setStatusError] = useState('')
 
@@ -941,6 +943,8 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // Unit summaries live under Study Units; assessment-linked briefs live under Assessments.
   // A brief sets assessment_id (unit_id null), so guarding on both keeps them from doubling up.
   const summariesFor = (unitId) => summaries.filter((s) => s.unit_id === unitId && !s.assessment_id)
+  // Owner-curated 'other' files with a unit show under that unit; Codex Files keeps the rest.
+  const unitFiles = (unitId) => resources.filter((r) => r.source !== 'efundi' && r.kind === 'other' && r.unit_id === unitId)
   const minutesFor = (unitId) => studyLog
     .filter((l) => l.unit_id === unitId)
     .reduce((sum, l) => sum + (l.minutes || 0), 0)
@@ -1080,10 +1084,20 @@ function ModulePage({ code, isViewer, userId, onBack }) {
                       📄 {s.title}
                     </button>
                   )
+                  // Files that belong to this unit (explainer decks, Noted-style notes: kind
+                  // 'other' with a unit) live here, not in Codex Files (her ask, 21 Oct 2026).
+                  const files = unitFiles(u.id)
+                  const fileBtn = (r) => (
+                    <button key={r.id} onClick={() => downloadResource(r.storage_path)} className="btn small ghost"
+                      title={r.title} style={{ borderColor: accent, color: accent }}>
+                      ⭳ {r.title.replace(/^Explainer deck \(download\):\s*/i, 'Deck: ')}
+                    </button>
+                  )
                   return (
                     <div className="mt-3 flex flex-wrap gap-2">
                       {shown.map(docBtn)}
-                      {!shown.length && !folded.length && (
+                      {files.map(fileBtn)}
+                      {!shown.length && !folded.length && !files.length && (
                         <span className="muted text-sm">{isViewer ? 'No summary yet.' : 'No summary yet — ask your tutor to make one.'}</span>
                       )}
                       {folded.length > 0 && (
@@ -1106,16 +1120,25 @@ function ModulePage({ code, isViewer, userId, onBack }) {
               return m ? m[0].trim() : `Study Unit ${g}`
             }
             const groups = [...new Set(units.map(groupNum))].sort((a, b) => a - b)
+            // Each Study Unit heading folds its panels away on a tap, remembered on this device.
             return (
               <div className="space-y-5">
-                {groups.map((g) => (
-                  <div key={g}>
-                    <div className="section-label mb-2" style={{ color: accent }}>{groupLabel(g)}</div>
-                    <div className="space-y-3">
-                      {units.filter((u) => groupNum(u) === g).map((u) => renderPanel(u, false))}
+                {groups.map((g) => {
+                  const key = `su:${code}:${g}`
+                  const closed = folds[key]
+                  const members = units.filter((u) => groupNum(u) === g)
+                  return (
+                    <div key={g}>
+                      <FoldHeading closed={closed} accent={accent} onClick={() => toggleFold(key)}
+                        label={groupLabel(g)} hint={`${members.length} sections`} />
+                      {!closed && (
+                        <div className="space-y-3">
+                          {members.map((u) => renderPanel(u, false))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )
           })()}
@@ -1171,7 +1194,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
           </div>
         </Section>
 
-        <CodexFiles resources={resources} units={units} accent={accent} />
+        <CodexFiles resources={resources} units={units} accent={accent} folds={folds} toggleFold={toggleFold} code={code} />
 
         <TrainingGrounds papers={papers} accent={accent} isViewer={isViewer} />
 
@@ -1661,6 +1684,36 @@ function NotebookLMKit({ mod, units, accent, onClose }) {
   )
 }
 
+// Which headings she has folded closed, remembered per device (localStorage, JSON of key → true).
+// Keys look like "su:MATH121:1" or "codex:MATH121:course_pdf". Unknown = open.
+const FOLDS_KEY = 'nwu-hub.folds'
+function useFolds() {
+  const [folds, setFolds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(FOLDS_KEY) || '{}') || {} } catch { return {} }
+  })
+  const toggleFold = (key) => setFolds((prev) => {
+    const next = { ...prev }
+    if (next[key]) delete next[key]; else next[key] = true
+    try { localStorage.setItem(FOLDS_KEY, JSON.stringify(next)) } catch { /* private mode: fine */ }
+    return next
+  })
+  return [folds, toggleFold]
+}
+
+// A section-label heading that folds its content on a tap: "▾ STUDY UNIT 1 (TRIGONOMETRY)".
+function FoldHeading({ closed, label, hint, accent, onClick }) {
+  return (
+    <button onClick={onClick} aria-expanded={!closed} className="section-label mb-2"
+      title={closed ? 'Show' : 'Fold away'}
+      style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: accent,
+        display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', width: '100%' }}>
+      <span style={{ width: 14, display: 'inline-block' }}>{closed ? '▸' : '▾'}</span>
+      <span>{label}</span>
+      {closed && hint && <span className="muted" style={{ letterSpacing: 0, textTransform: 'none', fontFamily: 'inherit' }}>· {hint}</span>}
+    </button>
+  )
+}
+
 // One quiet line that stands in for a pile of folded docs: "▸ 10 van Hiele docs" / "▾ hide".
 function FoldToggle({ open, count, what, onClick }) {
   return (
@@ -1719,10 +1772,11 @@ function humanSize(bytes) {
 
 // ---- Codex · Files (owner-curated PDFs + NotebookLM slides) ----
 // eFundi-synced files are intentionally excluded — they're tutor fuel, not hub content.
-function CodexFiles({ resources, units, accent }) {
+function CodexFiles({ resources, units, accent, folds, toggleFold, code }) {
   // Folded files (lib/shelf.js: the van Hiele readings) collapse to one row per group.
   const [unfolded, setUnfolded] = useState(() => new Set())
-  resources = resources.filter((r) => r.source !== 'efundi')
+  // 'other' files that belong to a study unit show under that unit instead (ModulePage).
+  resources = resources.filter((r) => r.source !== 'efundi' && !(r.kind === 'other' && r.unit_id))
   if (!resources.length) return null
   const unitById = {}
   units.forEach((u) => { unitById[u.id] = u })
@@ -1757,19 +1811,24 @@ function CodexFiles({ resources, units, accent }) {
           const shown = g.items.filter((r) => !isFolded(r))
           const folded = g.items.filter(isFolded)
           const open = unfolded.has(g.key)
+          const foldKey = `codex:${code}:${g.key}`
+          const closed = folds[foldKey]
           return (
             <div key={g.key}>
-              <div className="section-label mb-2" style={{ color: accent }}>{g.label}</div>
-              <div className="panel">
-                {shown.map(fileRow)}
-                {folded.length > 0 && (
-                  <div className="row">
-                    <FoldToggle open={open} count={folded.length} what="van Hiele files"
-                      onClick={() => setUnfolded((prev) => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n })} />
-                  </div>
-                )}
-                {open && folded.map(fileRow)}
-              </div>
+              <FoldHeading closed={closed} accent={accent} onClick={() => toggleFold(foldKey)}
+                label={g.label} hint={`${g.items.length} files`} />
+              {!closed && (
+                <div className="panel">
+                  {shown.map(fileRow)}
+                  {folded.length > 0 && (
+                    <div className="row">
+                      <FoldToggle open={open} count={folded.length} what="van Hiele files"
+                        onClick={() => setUnfolded((prev) => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n })} />
+                    </div>
+                  )}
+                  {open && folded.map(fileRow)}
+                </div>
+              )}
             </div>
           )
         })}
@@ -1823,8 +1882,8 @@ function TrainingGrounds({ papers, accent, isViewer }) {
               <div className="panel">
                 {g.items.map((p) => (
                   <div className="row" key={p.id}>
-                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                      <span className="truncate">{p.title}</span>
+                    <span className="flex items-center gap-2" style={{ minWidth: 0 }} title={p.title}>
+                      <span className="truncate">{paperLabel(p)}</span>
                     </span>
                     <span className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
                       <button onClick={() => downloadResource(p.paper_path)} className="btn small"

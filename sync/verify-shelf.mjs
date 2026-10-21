@@ -2,7 +2,7 @@
 // Run: node sync/verify-shelf.mjs   (exit 0 = all green)
 // Titles here are made up (public repo).
 import {
-  isFoldedTitle, splitFolded, paperTab, paperTopic, paperNumber, groupByTopic,
+  isFoldedTitle, splitFolded, paperTab, paperTopic, paperNumber, paperLabel, groupByTopic,
   buildTrainingGrounds, pickPaperTab, PAPER_TABS,
 } from '../src/lib/shelf.js'
 
@@ -53,6 +53,19 @@ check('number: after the word', paperNumber({ title: 'Practice Test 4 · Trigono
 check('number: after the topic', paperNumber({ title: 'Practice Test · Geometry 6 (60 marks, book round two)' }), 6)
 check('number: decimal', paperNumber({ title: 'Worksheet · Geometry 2.3 (Transformations)' }), 2.3)
 check('number: none → Infinity (sorts last)', paperNumber({ title: 'Practice Test · Geometry' }), Infinity)
+
+// ---- short labels ----
+check('label: geometry test with detail', paperLabel({ kind: 'practice', title: 'Practice Test · Geometry 4 (60 marks, proofs)' }), 'G4 · 60 marks, proofs')
+check('label: trig test, no detail', paperLabel({ kind: 'practice', title: 'Practice Test 1 · Trigonometry' }), 'T1')
+check('label: trig test with marks', paperLabel({ kind: 'practice', title: 'Practice Test 4 · Trigonometry (100 marks)' }), 'T4 · 100 marks')
+check('label: worksheet decimal', paperLabel({ kind: 'practice', title: 'Worksheet · Geometry 2.3 (Transformations)' }), 'G2.3 · Worksheet · Transformations')
+check('label: workbook', paperLabel({ kind: 'practice', title: 'Workbook · SU1 Trigonometry (write-on)' }), 'T1 · Workbook · write-on')
+check('label: worksheet, no detail', paperLabel({ kind: 'practice', title: 'Worksheet · SU1 Trigonometry' }), 'T1 · Worksheet')
+check('label: past paper keeps its title', paperLabel({ kind: 'past', title: 'December 2024 · Paper 1' }), 'December 2024 · Paper 1')
+check('label: unknown topic keeps its title', paperLabel({ kind: 'practice', title: 'Mixed revision 3' }), 'Mixed revision 3')
+check('label: no number keeps its title', paperLabel({ kind: 'practice', title: 'Practice Test · Geometry' }), 'Practice Test · Geometry')
+check('label: empty brackets ignored', paperLabel({ kind: 'practice', title: 'Practice Test · Geometry 2 ()' }), 'G2')
+check('label: no title', paperLabel({ kind: 'practice' }), '')
 
 // ---- grouping: newest first in, 1-2-3 per topic out, topic order = first seen ----
 const practice = [

@@ -55,6 +55,26 @@ export function paperNumber(p) {
   return m ? Number(m[0]) : Infinity
 }
 
+// Short row label, because a phone cuts "Practice Test · Geome…" before the part that tells
+// them apart (her ask, 21 Oct 2026). Topic initial + number, then the bracketed detail:
+//   "Practice Test · Geometry 4 (60 marks, proofs)"  → "G4 · 60 marks, proofs"
+//   "Practice Test 1 · Trigonometry"                 → "T1"
+//   "Worksheet · Geometry 2.3 (Transformations)"     → "G2.3 · Worksheet · Transformations"
+// Past papers and anything without a topic or number keep their full title.
+export function paperLabel(p) {
+  const title = p.title || ''
+  if (paperTab(p) === 'past') return title
+  const topic = paperTopic(p)
+  const n = paperNumber(p)
+  if (topic === 'Other' || n === Infinity) return title
+  const parts = [`${topic[0].toUpperCase()}${n}`]
+  const kindWord = title.match(/^\s*(worksheet|workbook)/i)
+  if (kindWord) parts.push(kindWord[1][0].toUpperCase() + kindWord[1].slice(1).toLowerCase())
+  const detail = title.match(/\(([^)]*)\)/)
+  if (detail && detail[1].trim()) parts.push(detail[1].trim())
+  return parts.join(' · ')
+}
+
 // Group one tab's papers under topic headings. Topics keep the order they first appear in
 // (the app loads papers newest first, so the topic she is busy with comes first); inside a
 // topic the papers run 1, 2, 3 … by the number in their title, ties in input order.
