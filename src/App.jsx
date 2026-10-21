@@ -21,6 +21,7 @@ import WeekPlanner from './WeekPlanner'
 import { plannerDb, getDemoLayer } from './lib/plannerData'
 import Marks from './Marks'
 import { marksDb, getMarksDemoLayer } from './lib/marksData'
+import { splitFolded, buildTrainingGrounds, pickPaperTab } from './lib/shelf'
 
 // Hash-routed tabs: the Week tab (#week, #week-wall) and the Marks tab (#marks). The module page
 // is not hash-routed.
@@ -880,6 +881,8 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [profiles, setProfiles] = useState({})
   const [openSummary, setOpenSummary] = useState(null)
   const [showKit, setShowKit] = useState(false)
+  // Study units whose folded docs (van Hiele, see lib/shelf.js) she has opened this visit.
+  const [unfolded, setUnfolded] = useState(() => new Set())
   const [loadError, setLoadError] = useState('')
   const [statusError, setStatusError] = useState('')
 
@@ -1067,13 +1070,30 @@ function ModulePage({ code, isViewer, userId, onBack }) {
                 {minutesFor(u.id) > 0 && (
                   <div className="muted text-sm mt-1">⏱ {formatMinutes(minutesFor(u.id))} logged so far</div>
                 )}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {summariesFor(u.id).length ? summariesFor(u.id).map((s) => (
+                {(() => {
+                  // Folded docs (lib/shelf.js: the van Hiele originals) sit behind one line
+                  // until she opens them, so the tab reads as the work she is busy with.
+                  const { shown, folded } = splitFolded(summariesFor(u.id), u.title)
+                  const open = unfolded.has(u.id)
+                  const docBtn = (s) => (
                     <button key={s.id} onClick={() => setOpenSummary(s)} className="btn small ghost" style={{ borderColor: accent, color: accent }}>
                       📄 {s.title}
                     </button>
-                  )) : <span className="muted text-sm">{isViewer ? 'No summary yet.' : 'No summary yet — ask your tutor to make one.'}</span>}
-                </div>
+                  )
+                  return (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {shown.map(docBtn)}
+                      {!shown.length && !folded.length && (
+                        <span className="muted text-sm">{isViewer ? 'No summary yet.' : 'No summary yet — ask your tutor to make one.'}</span>
+                      )}
+                      {folded.length > 0 && (
+                        <FoldToggle open={open} count={folded.length} what="van Hiele docs"
+                          onClick={() => setUnfolded((prev) => { const n = new Set(prev); n.has(u.id) ? n.delete(u.id) : n.add(u.id); return n })} />
+                      )}
+                      {open && folded.map(docBtn)}
+                    </div>
+                  )
+                })()}
               </div>
             )
             if (!isSectioned) {
@@ -1641,6 +1661,16 @@ function NotebookLMKit({ mod, units, accent, onClose }) {
   )
 }
 
+// One quiet line that stands in for a pile of folded docs: "▸ 10 van Hiele docs" / "▾ hide".
+function FoldToggle({ open, count, what, onClick }) {
+  return (
+    <button onClick={onClick} className="btn small ghost" aria-expanded={open}
+      title={open ? 'Fold them away again' : 'Show them'}>
+      {open ? '▾' : '▸'} {count} {what}{open ? ' · hide' : ''}
+    </button>
+  )
+}
+
 function Section({ title, empty, children }) {
   return (
     <section>
@@ -1690,75 +1720,127 @@ function humanSize(bytes) {
 // ---- Codex · Files (owner-curated PDFs + NotebookLM slides) ----
 // eFundi-synced files are intentionally excluded — they're tutor fuel, not hub content.
 function CodexFiles({ resources, units, accent }) {
+  // Folded files (lib/shelf.js: the van Hiele readings) collapse to one row per group.
+  const [unfolded, setUnfolded] = useState(() => new Set())
   resources = resources.filter((r) => r.source !== 'efundi')
   if (!resources.length) return null
   const unitById = {}
   units.forEach((u) => { unitById[u.id] = u })
+  const isFolded = (r) => splitFolded([r], r.unit_id ? unitById[r.unit_id]?.title : null).folded.length > 0
   const groups = [
     { key: 'course_pdf', label: 'Course PDFs', items: resources.filter((r) => r.kind === 'course_pdf') },
     { key: 'notebooklm', label: 'NotebookLM Slides', items: resources.filter((r) => r.kind === 'notebooklm') },
     { key: 'other', label: 'Other', items: resources.filter((r) => r.kind === 'other') },
   ].filter((g) => g.items.length)
 
+  const fileRow = (r) => {
+    const unit = r.unit_id ? unitById[r.unit_id] : null
+    return (
+      <div className="row" key={r.id}>
+        <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+          <span className="truncate">📄 {r.title}</span>
+          {unit && <span className="chip">Unit {unit.number}</span>}
+        </span>
+        <span className="flex items-center gap-3" style={{ flex: '0 0 auto' }}>
+          {r.size_bytes != null && <span className="muted text-xs">{humanSize(r.size_bytes)}</span>}
+          <button onClick={() => downloadResource(r.storage_path)} className="btn small ghost"
+            style={{ borderColor: accent, color: accent }}>⭳ Download</button>
+        </span>
+      </div>
+    )
+  }
+
   return (
     <Section title="Codex · Files">
       <div className="space-y-4">
-        {groups.map((g) => (
-          <div key={g.key}>
-            <div className="section-label mb-2" style={{ color: accent }}>{g.label}</div>
-            <div className="panel">
-              {g.items.map((r) => {
-                const unit = r.unit_id ? unitById[r.unit_id] : null
-                return (
-                  <div className="row" key={r.id}>
-                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                      <span className="truncate">📄 {r.title}</span>
-                      {unit && <span className="chip">Unit {unit.number}</span>}
-                    </span>
-                    <span className="flex items-center gap-3" style={{ flex: '0 0 auto' }}>
-                      {r.size_bytes != null && <span className="muted text-xs">{humanSize(r.size_bytes)}</span>}
-                      <button onClick={() => downloadResource(r.storage_path)} className="btn small ghost"
-                        style={{ borderColor: accent, color: accent }}>⭳ Download</button>
-                    </span>
+        {groups.map((g) => {
+          const shown = g.items.filter((r) => !isFolded(r))
+          const folded = g.items.filter(isFolded)
+          const open = unfolded.has(g.key)
+          return (
+            <div key={g.key}>
+              <div className="section-label mb-2" style={{ color: accent }}>{g.label}</div>
+              <div className="panel">
+                {shown.map(fileRow)}
+                {folded.length > 0 && (
+                  <div className="row">
+                    <FoldToggle open={open} count={folded.length} what="van Hiele files"
+                      onClick={() => setUnfolded((prev) => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n })} />
                   </div>
-                )
-              })}
+                )}
+                {open && folded.map(fileRow)}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </Section>
   )
 }
 
 // ---- Training Grounds · Past & Practice Papers ----
+const PAPER_TAB_KEY = 'nwu-hub.papersTab'
 function TrainingGrounds({ papers, accent, isViewer }) {
+  // Three pills (Practice tests · Worksheets · Past papers), topic headings inside each
+  // (lib/shelf.js). The pill she last tapped is remembered on this device.
+  const tabs = buildTrainingGrounds(papers)
+  // `tab` is only her wish (remembered or tapped); which pill is really open is decided on
+  // every render, because papers arrive after the first paint and a wish for an empty tab
+  // falls through to the first pill that has papers.
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem(PAPER_TAB_KEY) } catch { return null /* private mode: fine */ }
+  })
+  const activeKey = pickPaperTab(tabs, tab)
+  const active = tabs.find((t) => t.key === activeKey && t.count > 0) || null
+  const choose = (k) => {
+    setTab(k)
+    try { localStorage.setItem(PAPER_TAB_KEY, k) } catch { /* ignore */ }
+  }
   // Owner always sees the section (empty → placeholder, so she can confirm it renders);
   // a viewer only sees it once there's actually a paper to download.
   if (!papers.length && isViewer) return null
   return (
     <Section title="Training Grounds · Past & Practice Papers"
       empty={!papers.length && 'No papers uploaded yet — they’ll appear here once seeded.'}>
-      <div className="panel">
-        {papers.map((p) => (
-          <div className="row" key={p.id}>
-            <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
-              <span className="truncate">{p.title}</span>
-              {p.kind === 'practice' && (
-                <span className="chip" style={{ borderColor: accent, color: accent }}>practice</span>
-              )}
-            </span>
-            <span className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
-              <button onClick={() => downloadResource(p.paper_path)} className="btn small"
-                style={{ background: accent, borderColor: accent, color: '#04121f' }}>Paper</button>
-              {p.memo_path
-                ? <button onClick={() => downloadResource(p.memo_path)} className="btn small ghost"
-                    style={{ borderColor: accent, color: accent }}>Memo</button>
-                : <span className="chip" title="No memo yet">memo —</span>}
-            </span>
-          </div>
-        ))}
-      </div>
+      {papers.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {tabs.filter((t) => t.count > 0).map((t) => {
+            const on = active && t.key === active.key
+            return (
+              <button key={t.key} onClick={() => choose(t.key)} className="btn small ghost" aria-pressed={on}
+                style={on ? { background: accent, borderColor: accent, color: '#04121f' } : { borderColor: accent, color: accent }}>
+                {t.label} <span style={{ opacity: .75 }}>· {t.count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {active && (
+        <div className="space-y-4">
+          {active.groups.map((g) => (
+            <div key={g.topic ?? '_'}>
+              {g.topic && <div className="section-label mb-2" style={{ color: accent }}>{g.topic}</div>}
+              <div className="panel">
+                {g.items.map((p) => (
+                  <div className="row" key={p.id}>
+                    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                      <span className="truncate">{p.title}</span>
+                    </span>
+                    <span className="flex items-center gap-2" style={{ flex: '0 0 auto' }}>
+                      <button onClick={() => downloadResource(p.paper_path)} className="btn small"
+                        style={{ background: accent, borderColor: accent, color: '#04121f' }}>Paper</button>
+                      {p.memo_path
+                        ? <button onClick={() => downloadResource(p.memo_path)} className="btn small ghost"
+                            style={{ borderColor: accent, color: accent }}>Memo</button>
+                        : <span className="chip" title="No memo yet">memo —</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Section>
   )
 }
