@@ -80,6 +80,16 @@ const isWeight = (w) => typeof w === 'number' && Number.isFinite(w) && w > 0
 // Modules whose pie shows the whole module, exam included (see the top of this file).
 export const EXAM_IN_PIE = new Set(['EDCC125'])
 
+// Hidden modules (no tile) that still get a pie on the Marks tab: TPED178 is a year module, but its
+// portfolio pie belongs here (her ruling 2026-10-22).
+export const PIE_EVEN_IF_HIDDEN = new Set(['TPED178'])
+
+// True when the Marks tab draws a pie for this module: any visible module, plus the hidden ones above.
+export function showsPie(module) {
+  if (!module) return false
+  return !module.hidden || PIE_EVEN_IF_HIDDEN.has(module.code)
+}
+
 // Returns { slices, unweighted, average, banked, scale, gap }.
 //
 // scale — what the stored weights are multiplied by to become a share of the circle:
@@ -228,6 +238,9 @@ export function shortLabel(title, moduleCode = null) {
   // "T3" only in SHORT_TEST_NAMES modules (her rulings 2026-10-17: ENGV + SECL, EDCC; MATH keeps
   // "Test 1").
   t = t.replace(/^Ass(?:ignment)? +(\d+)$/i, 'A$1')
+  // "Semester 1 Workbook Submission" reads "Workbook 1" (TPED178's two workbooks; the rest of the title
+  // is dropped, the number stays).
+  t = t.replace(/^Semester +(\d) +Workbook(?: .*)?$/i, 'Workbook $1')
   if (SHORT_TEST_NAMES.has(moduleCode)) t = t.replace(/^Test +(\d+)$/i, 'T$1')
   if (!t) t = full
   return t.length > LABEL_MAX ? `${t.slice(0, LABEL_MAX - 1).trimEnd()}…` : t

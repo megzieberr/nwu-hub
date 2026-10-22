@@ -2,7 +2,7 @@
 // Run: node sync/verify-marks.mjs   (exit 0 = all green)
 // Every number here is made up (public repo): ids/titles like "a1", "Task 1", "MOD101".
 import {
-  SLICE_COLOUR_COUNT, parseMarkInput, buildPie, formatNumber, wedgePath, ringDash, shortLabel, pieLabels,
+  SLICE_COLOUR_COUNT, parseMarkInput, buildPie, formatNumber, wedgePath, ringDash, shortLabel, pieLabels, showsPie,
 } from '../src/lib/marks.js'
 
 let pass = 0
@@ -365,6 +365,18 @@ check('labels: unequal slices are still judged one by one', pieLabels(sl([5, 25,
 check('labels: the viewBox grows upwards for a name above the rim', thin.box.y < 0, true)
 check('labels: a whole-circle slice is labelled at the centre', pieLabels(sl([100]), 100, 100, 90).labels[0].x, 100)
 check('labels: no slices, no labels', pieLabels([], 100, 100, 90).labels, [])
+
+// ---- showsPie: which modules the Marks tab draws a pie for ----
+check('showsPie: a visible module', showsPie({ code: 'MOD101', hidden: false }), true)
+check('showsPie: a hidden module', showsPie({ code: 'HIDE107', hidden: true }), false)
+check('showsPie: a hidden module on the exception list (TPED178)', showsPie({ code: 'TPED178', hidden: true }), true)
+check('showsPie: null', showsPie(null), false)
+
+// ---- shortLabel: workbook titles ----
+check('label: Semester 1 Workbook Submission', shortLabel('Semester 1 Workbook Submission'), 'Workbook 1')
+check('label: Semester 2 Workbook Submission (TPED178)', shortLabel('Semester 2 Workbook Submission', 'TPED178'), 'Workbook 2')
+check('label: the attendance row keeps its old truncation', shortLabel('Semester 2 Attendance and mentor report documents'), 'Semester 2 Attend…')
+check('label: the attendance row is not a workbook', shortLabel('Semester 2 Attendance and mentor report documents').startsWith('Workbook'), false)
 
 console.log(`${pass}/${pass + fail} checks passed`)
 process.exit(fail ? 1 : 0)

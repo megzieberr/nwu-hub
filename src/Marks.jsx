@@ -11,7 +11,7 @@
 // TYPED from her record, never computed: no average across modules is worked out anywhere here.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  buildPie, wedgePath, parseMarkInput, formatNumber, ringDash, pieLabels, SLICE_COLOUR_COUNT, LABEL_LINE_HEIGHT,
+  buildPie, wedgePath, parseMarkInput, formatNumber, ringDash, pieLabels, SLICE_COLOUR_COUNT, LABEL_LINE_HEIGHT, showsPie,
 } from './lib/marks'
 
 // The six slice colours, in slice order, the same in every module (her choice). Index = colourIndex.
@@ -60,14 +60,15 @@ export default function Marks({ db, userId }) {
   useEffect(() => { load() }, [load])
 
   const modules = useMemo(() => (data ? data.modules.filter((m) => !m.hidden) : []), [data])
+  const pieModules = useMemo(() => (data ? data.modules.filter(showsPie) : []), [data])
   const pies = useMemo(() => {
     if (!data) return new Map()
     const out = new Map()
-    for (const m of modules) {
+    for (const m of pieModules) {
       out.set(m.id, buildPie(data.assessments.filter((a) => a.module_id === m.id), data.myMarks, m))
     }
     return out
-  }, [data, modules])
+  }, [data, pieModules])
 
   // ---------- writes: change the screen at once, roll back with a plain line if it fails ----------
 
@@ -170,7 +171,7 @@ export default function Marks({ db, userId }) {
     )
   }
 
-  const open = openId ? modules.find((m) => m.id === openId) : null
+  const open = openId ? pieModules.find((m) => m.id === openId) : null
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 mk" data-marks-root="">
@@ -179,11 +180,11 @@ export default function Marks({ db, userId }) {
 
       <section className="mt-5">
         <h2 className="section-label mb-3">This semester</h2>
-        {modules.length === 0 ? (
+        {pieModules.length === 0 ? (
           <p className="muted">No modules yet.</p>
         ) : (
           <div className="mk-grid" data-pie-grid="">
-            {modules.map((m) => (
+            {pieModules.map((m) => (
               <PieCard key={m.id} module={m} pie={pies.get(m.id)}
                 onOpen={() => { setOpenId(m.id); setEditing(null) }} />
             ))}
