@@ -110,4 +110,5 @@ objectives, deadlines, file list (titles+paths), summaries. See `docs/tutor-cont
 - eFundi site codes are sem-1 (`111`); hub `modules.code` are sem-2 (`121`/`122`). Only exact code
   matches are mapped — never guess.
 - Docs: `docs/efundi-sync-plan.md` (design), `-audit.md` (review + findings), `-buildlog.md`,
-  `-recon.md`, `tutor-context.md`.
+  `-recon.md`, `tutor-context.md`. `docs/build-your-own-hub.md` is the shareable "how it was built /
+  how it talks to eFundi" guide for other students who want their own hub.
