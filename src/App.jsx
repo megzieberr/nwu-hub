@@ -557,7 +557,7 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
                           show one of four EDCC125 tests and looked like the only one. */}
                       {d.alsoDue > 0 && (
                         <span className="muted text-sm" style={{ marginLeft: 6 }}>
-                          + {d.alsoDue} more due that day
+                          + {d.alsoDue} more {d.tbc ? 'with date TBC' : 'due that day'}
                         </span>
                       )}
                     </span>
@@ -566,7 +566,7 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
                         tick stranding itself below a squeezed title. */}
                     <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span className="text-sm" style={{ whiteSpace: 'nowrap', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
-                        {d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
+                        {d.tbc ? 'date TBC' : d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
                       </span>
                       {!isViewer && (
                         <button onClick={() => markDone(d)} className="icon-btn"

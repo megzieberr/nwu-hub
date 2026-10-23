@@ -33,8 +33,19 @@ export function weekAhead(assessments, today = new Date().toISOString().slice(0,
 export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10)) {
   const upcoming = new Map()   // module → the rows sharing its SOONEST upcoming day
   const missed = new Map()     // module → the rows sharing its most recent missed day
+  const tbc = new Map()        // module → its undated rows switched on with show_tbc (0025)
   for (const d of deadlines || []) {
-    if (!d || !d.due_date) continue
+    if (!d) continue
+    // An undated row stays off this card unless she switched it on (Megan, 2026-10-23: SECL A3,
+    // "just so I can be reminded about it every time I open the hub"). It gets its own line, after
+    // the dated ones, so it never pushes a real deadline off its module's line.
+    if (!d.due_date) {
+      if (d.show_tbc && (!d.status || d.status === 'upcoming')) {
+        const key = d.modules?.code || d.module_id
+        tbc.set(key, [...(tbc.get(key) || []), { ...d, days: null }])
+      }
+      continue
+    }
     // A ticked-off deadline leaves the card (s22 — the ✓ writes status='submitted'). The dashboard
     // query already asks only for 'upcoming', so this is the belt to that braces: "ticked = gone"
     // is now true of the decision itself, not just of one caller's .eq() filter. A row with NO
@@ -61,6 +72,8 @@ export function myWeek(deadlines, today = new Date().toISOString().slice(0, 10))
     }),
   ].sort((a, b) => a.days - b.days ||
     String(a.modules?.code || '').localeCompare(String(b.modules?.code || '')))
+    .concat([...tbc.values()].map((g) => ({ ...collapse(g), overdue: false, thisWeek: false, tbc: true }))
+      .sort((a, b) => String(a.modules?.code || '').localeCompare(String(b.modules?.code || ''))))
 }
 
 // Several deadlines can land on ONE day — EDCC125's four tests all close 7 October. My Week has

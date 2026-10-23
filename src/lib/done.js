@@ -38,7 +38,8 @@ export function seenBy(rows, { isViewer = false, doneIds } = {}) {
 // Dashboard My Week rows. The owner's fetch still asks for status = 'upcoming' only; the viewer's
 // fetch has no status filter, so her rows come in with whatever the owner set and seenBy swaps it
 // for her own state. The past is bounded by myWeek itself: a missed deadline shows as overdue for
-// QUEST_OVERDUE_GRACE_DAYS and then drops off, and undated rows never show on this card. That is
+// QUEST_OVERDUE_GRACE_DAYS and then drops off, and undated rows show only when switched on with
+// show_tbc (0025), as a "date TBC" line that a tick removes like any other. That is
 // the same window the owner has, so no extra date filter is added here.
 export function visibleDeadlinesFor(rows, { isViewer = false, doneIds, today } = {}) {
   return myWeek(seenBy(rows, { isViewer, doneIds }), today)

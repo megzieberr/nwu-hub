@@ -130,6 +130,21 @@ const missedTie = myWeek([
 check('same-day: two missed on one day collapse to one overdue line',
   [missedTie.length, missedTie[0].id, missedTie[0].alsoDue, missedTie[0].overdue], [1, 'ma', 1, true])
 
+// ---- show_tbc (0025): an undated row she switched on ----
+const M = (code) => ({ code })
+const SECL = M('SECL121')
+const tbcRows = myWeek([
+  { id: 'a3', title: 'Ass 3 quiz', due_date: null, status: 'upcoming', show_tbc: true, modules: SECL },
+  { id: 'a4', title: 'Ass 4 quiz', due_date: null, status: 'upcoming', modules: SECL },            // switch off
+  { id: 'a6', title: 'A6', due_date: null, status: 'upcoming', show_tbc: true, modules: M('ENGV121') },
+  { id: 'a5', title: 'A5 panel', due_date: '2026-08-20', status: 'upcoming', modules: M('ENGV121') },
+  { id: 'x', title: 'ticked', due_date: null, status: 'submitted', show_tbc: true, modules: M('ALDE122') },
+], TODAY)
+check('show_tbc: dated rows first, then one TBC line per switched-on module, ticked one gone',
+  tbcRows.map((r) => [r.id, !!r.tbc]), [['a5', false], ['a6', true], ['a3', true]])
+check('show_tbc: a row with the switch off stays hidden', tbcRows.some((r) => r.id === 'a4'), false)
+check('show_tbc: a TBC line is never overdue or this-week', [tbcRows[2].overdue, tbcRows[2].thisWeek, tbcRows[2].days], [false, false, null])
+
 // ---- labels ----
 check('dueLabel: today', dueLabel(0), 'today')
 check('dueLabel: tomorrow', dueLabel(1), 'tomorrow')
