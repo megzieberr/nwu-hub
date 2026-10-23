@@ -121,5 +121,21 @@ check('pick: nothing remembered → first non-empty', pickPaperTab(tg, null), 'p
 check('pick: only past papers → past', pickPaperTab(buildTrainingGrounds(all.filter((p) => p.kind === 'past')), null), 'past')
 check('pick: no papers at all → first tab', pickPaperTab(none, 'nonsense'), PAPER_TABS[0].key)
 
+// ---- lecturer lesson notes (23 Oct 2026) ----
+{
+  const L4 = { title: 'Geometry · L 4.1-4.5', kind: 'practice' }
+  const L7 = { title: 'Geometry · L 7.1-7.5', kind: 'practice' }
+  const W21 = { title: 'Worksheet · Geometry 2.1 (Triangles)', kind: 'practice' }
+  const PT = { title: 'Practice Test · Geometry 4 (60 marks, proofs)', kind: 'practice' }
+  check('lesson notes: row label is just L 4.1-4.5', paperLabel(L4), 'L 4.1-4.5')
+  check('lesson notes: row label is just L 7.1-7.5', paperLabel(L7), 'L 7.1-7.5')
+  check('lesson notes: Worksheets tab', [paperTab(L4), paperTab(L7)], ['worksheet', 'worksheet'])
+  check('lesson notes: Geometry heading', [paperTopic(L4), paperTopic(L7)], ['Geometry', 'Geometry'])
+  const ws = buildTrainingGrounds([L7, W21, L4, PT]).find((t) => t.key === 'worksheet')
+  check('lesson notes: run after the 2.x worksheets, in order', ws.groups.map((g) => [g.topic, g.items.map(paperLabel)]),
+    [['Geometry', ['G2.1 · Worksheet · Triangles', 'L 4.1-4.5', 'L 7.1-7.5']]])
+  check('lesson notes: a practice test is untouched', [paperTab(PT), paperLabel(PT)], ['practice', 'G4 · 60 marks, proofs'])
+}
+
 console.log(`${pass}/${pass + fail} verify-shelf`)
 process.exit(fail ? 1 : 0)

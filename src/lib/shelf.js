@@ -34,9 +34,14 @@ export const PAPER_TABS = [
   { key: 'past', label: 'Past papers' },
 ]
 
+// The lecturer's own lesson notes ("Geometry · L 4.1-4.5", her ask 23 Oct 2026): the topic word
+// stays in the stored title so they file under their heading, the row shows only "L 4.1-4.5".
+const LESSON = /(?:^|·\s*)(L\s*\d[\d.\s–-]*)$/
+
 export function paperTab(p) {
   if (p.kind === 'past') return 'past'
   if (/^\s*(worksheet|workbook)s?\b/i.test(p.title || '')) return 'worksheet'
+  if (LESSON.test(p.title || '')) return 'worksheet'
   return 'practice'
 }
 
@@ -64,6 +69,8 @@ export function paperNumber(p) {
 export function paperLabel(p) {
   const title = p.title || ''
   if (paperTab(p) === 'past') return title
+  const lesson = title.match(LESSON)
+  if (lesson) return lesson[1].trim()
   const topic = paperTopic(p)
   const n = paperNumber(p)
   if (topic === 'Other' || n === Infinity) return title
