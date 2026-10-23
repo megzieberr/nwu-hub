@@ -8,7 +8,7 @@
 //   3. viewer: her own tick hides a deadline;
 //   4. viewer: a past-due unticked row is not listed once it is past the overdue grace;
 //   5. undated rows.
-import { isDoneFor, seenBy, visibleDeadlinesFor, weekAheadFor, VIEWER_DONE } from '../src/lib/done.js'
+import { isDoneFor, seenBy, visibleDeadlinesFor, weekAheadFor, VIEWER_DONE, canSkip, isSkippedFor } from '../src/lib/done.js'
 import { myWeek, weekAhead } from '../src/lib/week.js'
 import { QUEST_OVERDUE_GRACE_DAYS } from '../src/lib/quests.js'
 
@@ -153,6 +153,38 @@ check('the overdue grace this relies on is still 4 days', QUEST_OVERDUE_GRACE_DA
   check('viewer: an undated row can be ticked and unticked on the module page',
     [isDoneFor(und[0], viewer()), isDoneFor(und[0], viewer('u1')), isDoneFor(und[1], viewer())], [false, true, false])
   check('owner: undated graded row still reads done on the module page', isDoneFor(und[1], OWNER), true)
+}
+
+// ==================================================================
+// 6. Skip ("we didn't write it", s50)
+// ==================================================================
+{
+  const t = (title) => canSkip({ title })
+  check('skip: "Assignment 4 EXTENDED" can be skipped', t('Assignment 4 EXTENDED'), true)
+  check('skip: "2nd Opportunity · A1 MCQ" can be skipped', t('2nd Opportunity · A1 MCQ (week of 19 Oct)'), true)
+  check('skip: "Second opportunity test" can be skipped', t('Second opportunity test'), true)
+  check('skip: "Opp 2: written exam" can be skipped', t('Opp 2: written exam'), true)
+  check('skip: "Tweede geleentheid" can be skipped', t('Toets 3 tweede geleentheid'), true)
+  check('skip: an exam that only MENTIONS Opp 2 mid-title is NOT skippable',
+    t('Exam · Opportunity 1: open-book MCQ · Opp 2 = closed book, 4 written Qs'), false)
+  check('skip: a plain assignment is NOT skippable', t('Assignment 5 · Panel discussion'), false)
+  check('skip: a test is NOT skippable', t('Test 3 · Surface area'), false)
+  check('skip: no title / null row is not skippable', [canSkip({}), canSkip(null)], [false, false])
+
+  // owner: 'missed' = skipped, and it already counts as done (leaves My Week, struck through)
+  const m = row('s1', '2026-10-03', 'missed')
+  check('owner: missed reads as skipped', isSkippedFor(m, OWNER), true)
+  check('owner: missed also reads as done', isDoneFor(m, OWNER), true)
+  check('owner: upcoming is not skipped', isSkippedFor(row('s2', null, 'upcoming'), OWNER), false)
+  check('owner: a skipped overdue row is off My Week', ids(visibleDeadlinesFor([m], { ...OWNER, today: TODAY })), [])
+
+  // viewer: the owner's 'missed' plays no part; her own skipped row does
+  const v = { isViewer: true, doneIds: new Set(['s1']), skippedIds: new Set(['s1']) }
+  check('viewer: the owner\'s missed is not her skip', isSkippedFor(m, viewer()), false)
+  check('viewer: the owner\'s missed still shows overdue for her until she acts', ids(visibleDeadlinesFor([m], { ...viewer(), today: TODAY })), ['s1'])
+  check('viewer: her own skip reads as skipped', isSkippedFor(m, v), true)
+  check('viewer: her own skip drops it off My Week', ids(visibleDeadlinesFor([m], { ...v, today: TODAY })), [])
+  check('viewer: a plain tick is not a skip', isSkippedFor(m, { isViewer: true, doneIds: new Set(['s1']), skippedIds: new Set() }), false)
 }
 
 // ---- empty / odd input ----

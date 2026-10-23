@@ -10,7 +10,7 @@ import { dueLabel, formatDue } from './lib/week'
 // Own ticks (0024): the owner's done-state is assessments.status, the viewer's is her my_done rows.
 // myWeek and weekAhead are reached through these wrappers, which hand the owner's rows through
 // untouched and swap in the viewer's own state for her.
-import { isDoneFor, visibleDeadlinesFor, weekAheadFor } from './lib/done'
+import { isDoneFor, isSkippedFor, canSkip, visibleDeadlinesFor, weekAheadFor } from './lib/done'
 import { googleAddEventUrl } from './lib/classcal'
 import CalendarFeedButton from './CalendarCard'
 import SyncHealth from './SyncHealth'
@@ -207,7 +207,7 @@ function SyncAlert({ lastSync }) {
 // 🔊 / 🔇 for the tick-off ping. It has an off switch on purpose: a sound with no way to silence
 // it is a nuisance the first time you tick something off in a lecture. Per device, so a phone and
 // a laptop keep their own answer — and so Lize's device does too (she ticks her own To Do List,
-// even though the deadline and assessment ticks are hidden for a viewer).
+// and her own deadlines and assessments since own ticks, 0024).
 //
 // Unmuting plays the ping straight away, so the button demonstrates what it just switched on
 // rather than leaving you to go and tick something to find out.
@@ -297,9 +297,10 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
   const [modules, setModules] = useState([])
   const [deadlines, setDeadlines] = useState([])
   const [doneIds, setDoneIds] = useState(() => new Set())  // viewer only: her own my_done ticks
+  const [skippedIds, setSkippedIds] = useState(() => new Set())  // viewer only: the ticks that are skips (0026)
   const [goals, setGoals] = useState([])
   const [showDone, setShowDone] = useState(false)
-  const [justDone, setJustDone] = useState(null)   // last deadline ticked off — holds the undo line
+  const [justDone, setJustDone] = useState(null)   // last deadline ticked off or skipped — holds the undo line
   const [lastSync, setLastSync] = useState(null)
   const [error, setError] = useState('')
 
@@ -316,9 +317,10 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
         aq.order('due_date'),
         // RLS (0024) hands each account only her own rows. Before 0024 is applied this is an error
         // object, not a throw, and the viewer simply has no ticks yet.
-        isViewer ? supabase.from('my_done').select('assessment_id') : Promise.resolve({ data: [] }),
+        isViewer ? supabase.from('my_done').select('assessment_id, skipped') : Promise.resolve({ data: [] }),
       ])
       setDoneIds(new Set((md.data || []).map((r) => r.assessment_id)))
+      setSkippedIds(new Set((md.data || []).filter((r) => r.skipped).map((r) => r.assessment_id)))
       if (m.error) setError(m.error.message)
       // Hidden modules still sync (their announcements feed the objectives agent) but get no
       // dashboard tile — drop them here so both the grid and the module count skip them.
@@ -386,23 +388,42 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
   // `assessments.status` has held ('upcoming','submitted','graded','missed') since 0001 and NOTHING
   // in the app has ever written it, so every deadline stayed `upcoming` for ever and the red OVERDUE
   // row could only age out on the 4-day grace. No migration needed: the column exists, authenticated
-  // already holds UPDATE on all 15 columns, and `hub_write` gates it to the owner (a viewer's tick
-  // would be refused by RLS anyway — the button is hidden for them regardless).
+  // already holds UPDATE on all 15 columns, and `hub_write` gates it to the owner (the viewer's
+  // tick never touches this row: it is her own my_done row, see s50 below).
   //
   // The owner's dashboard only ever fetches status='upcoming' (and myWeek drops non-upcoming rows),
   // so a ticked item leaves the card at once. `justDone` keeps ONE undo line on screen afterwards:
   // without it, a mis-tap could only be fixed by walking into the module page, and the row that
   // vanished would be a missed deadline she still needs. The sync can't resurrect it either —
   // sync/write.js updates only worker-owned fields and never touches status.
-  async function markDone(d) {
-    ping()
-    setDeadlines((ds) => ds.filter((x) => x.id !== d.id))
-    setJustDone(d)
-    const { error: e } = await supabase.from('assessments').update({ status: 'submitted' }).eq('id', d.id)
+  //
+  // s50 (her ask, 2026-10-23): the viewer gets the ✓ here too, and both accounts get a "skip" on
+  // extended / second-opportunity rows (canSkip). A skip is "we didn't write it": the owner's goes
+  // to status 'missed', the viewer's is a my_done row with skipped = true. No ping for a skip, it
+  // is not an achievement. The viewer's rows stay in `deadlines` (her fetch has no status filter);
+  // her own doneIds decide what drops off, so her undo just takes the id back out.
+  const mineFlip = (id, on, skip) => {
+    const f = (s) => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n }
+    setDoneIds(f)
+    if (skip) setSkippedIds(f)
+  }
+  async function markDone(d, skip = false) {
+    if (!skip) ping()
+    setJustDone({ ...d, skipped: skip })
+    let e
+    if (isViewer) {
+      mineFlip(d.id, true, skip)
+      ;({ error: e } = await supabase.from('my_done').insert({ owner: userId, assessment_id: d.id, skipped: skip }))
+      if (e && e.code === '23505') e = null  // already there (a quick second tap)
+      if (e) mineFlip(d.id, false, skip)
+    } else {
+      setDeadlines((ds) => ds.filter((x) => x.id !== d.id))
+      ;({ error: e } = await supabase.from('assessments').update({ status: skip ? 'missed' : 'submitted' }).eq('id', d.id))
+      if (e) setDeadlines((ds) => [...ds, d])
+    }
     if (e) {
-      setDeadlines((ds) => [...ds, d])
       setJustDone(null)
-      setError('Could not tick that off — ' + e.message)
+      setError((skip ? 'Could not skip that — ' : 'Could not tick that off — ') + e.message)
     }
   }
 
@@ -410,10 +431,13 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
   // the opposite order to markDone above, on purpose: a failed undo must leave the line saying
   // "ticked off" (which is still true of the database) rather than showing a deadline that isn't.
   async function undoDone(d) {
-    const { error: e } = await supabase.from('assessments').update({ status: 'upcoming' }).eq('id', d.id)
+    const { error: e } = isViewer
+      ? await supabase.from('my_done').delete().eq('assessment_id', d.id).eq('owner', userId)
+      : await supabase.from('assessments').update({ status: 'upcoming' }).eq('id', d.id)
     if (e) { setError('Could not undo that — ' + e.message); return }
     setJustDone(null)
-    setDeadlines((ds) => [...ds, d])
+    if (isViewer) mineFlip(d.id, false, true)
+    else setDeadlines((ds) => [...ds, d])
   }
 
   // Optimistic tick: flip `done` locally, then persist. On failure, revert and surface it.
@@ -568,11 +592,14 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
                       <span className="text-sm" style={{ whiteSpace: 'nowrap', color: d.overdue || d.thisWeek ? c : 'var(--muted, #8aa0b8)' }}>
                         {d.tbc ? 'date TBC' : d.overdue ? `OVERDUE · was ${formatDue(d.due_date)}` : `${d.thisWeek ? '⏰ ' : ''}${formatDue(d.due_date)} · ${dueLabel(d.days)}`}
                       </span>
-                      {!isViewer && (
-                        <button onClick={() => markDone(d)} className="icon-btn"
-                          aria-label={`Mark ${d.title} as done`} title="Mark as done"
-                          style={{ padding: 0, width: 38, justifyContent: 'center', color: 'var(--muted)', fontSize: 15 }}>✓</button>
+                      {canSkip(d) && (
+                        <button onClick={() => markDone(d, true)} className="btn small ghost"
+                          aria-label={`Skip ${d.title}: we didn't write it`} title="We didn't write it: take it off the list"
+                          style={{ flex: '0 0 auto' }}>Skip</button>
                       )}
+                      <button onClick={() => markDone(d)} className="icon-btn"
+                        aria-label={`Mark ${d.title} as done`} title="Mark as done"
+                        style={{ padding: 0, width: 38, justifyContent: 'center', color: 'var(--muted)', fontSize: 15 }}>✓</button>
                     </span>
                   </div>
                 )
@@ -582,7 +609,7 @@ function Dashboard({ isViewer, userId, onOpenModule, onOpenWeek, onOpenMarks }) 
           {justDone && (
             <div className="panel p-3 mt-3 flex items-center gap-3" style={{ flexWrap: 'wrap', rowGap: 8 }}>
               <span className="text-sm muted" style={{ minWidth: 120, flex: '1 1 0' }}>
-                ✓ {justDone.modules?.code} · {justDone.title} — ticked off.
+                {justDone.skipped ? '⤼' : '✓'} {justDone.modules?.code} · {justDone.title} — {justDone.skipped ? "skipped, we didn't write it." : 'ticked off.'}
               </span>
               <button onClick={() => undoDone(justDone)} className="btn small ghost" style={{ flex: '0 0 auto' }}>Undo</button>
             </div>
@@ -874,6 +901,7 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   const [summaries, setSummaries] = useState([])
   const [assessments, setAssessments] = useState([])
   const [doneIds, setDoneIds] = useState(() => new Set())  // viewer only: her own my_done ticks
+  const [skippedIds, setSkippedIds] = useState(() => new Set())  // viewer only: the ticks that are skips (0026)
   const [resources, setResources] = useState([])
   const [papers, setPapers] = useState([])
   const [parts, setParts] = useState([])
@@ -919,8 +947,9 @@ function ModulePage({ code, isViewer, userId, onBack }) {
       // The viewer's own ticks (0024). RLS gives each account only her own rows; before 0024 is
       // applied this is an error object, not a throw, and she simply has no ticks yet.
       if (isViewer) {
-        const { data: md } = await supabase.from('my_done').select('assessment_id')
+        const { data: md } = await supabase.from('my_done').select('assessment_id, skipped')
         setDoneIds(new Set((md || []).map((r) => r.assessment_id)))
+        setSkippedIds(new Set((md || []).filter((r) => r.skipped).map((r) => r.assessment_id)))
       }
       const pmap = {}
       ;(profs.data || []).forEach((p) => { pmap[p.id] = p })
@@ -959,9 +988,11 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // The permanent home of the tick (s22). The dashboard's ✓ is the quick one and keeps a single
   // undo line; THIS list shows every assessment whatever its status, so a tick made days ago is
   // still findable and reversible here. Optimistic, with a revert on failure.
-  async function toggleAssessment(a) {
-    if (isViewer) return toggleMine(a)
-    const status = a.status === 'upcoming' ? 'submitted' : 'upcoming'
+  // skip = true is the s50 "we didn't write it" button (extended / second opportunity rows only):
+  // the owner's goes to 'missed', the ↺ brings either kind back to 'upcoming'. No ping for a skip.
+  async function toggleAssessment(a, skip = false) {
+    if (isViewer) return toggleMine(a, skip)
+    const status = a.status !== 'upcoming' ? 'upcoming' : skip ? 'missed' : 'submitted'
     if (status === 'submitted') ping()  // not on the ↺ — see toggleGoal
     setStatusError('')
     setAssessments((as) => as.map((x) => (x.id === a.id ? { ...x, status } : x)))
@@ -975,27 +1006,27 @@ function ModulePage({ code, isViewer, userId, onBack }) {
   // The viewer's tick (0024). Her done-state is a my_done row of her own: tick = insert it,
   // untick = delete it. The shared assessment row is never written. Same feel as the owner's tick:
   // optimistic, the ping only on the way in, and a rollback if the save fails.
-  async function toggleMine(a) {
+  // A skip (0026) is the same row with skipped = true; unticking deletes either kind.
+  async function toggleMine(a, skip = false) {
     const wasDone = doneIds.has(a.id)
-    if (!wasDone) ping()  // not on the untick, see toggleGoal
+    const wasSkipped = skippedIds.has(a.id)
+    if (!wasDone && !skip) ping()  // not on the untick, see toggleGoal
     setStatusError('')
-    const flip = (on) => setDoneIds((s) => {
-      const n = new Set(s)
-      if (on) n.add(a.id); else n.delete(a.id)
-      return n
-    })
-    flip(!wasDone)
+    const set = (on) => (s) => { const n = new Set(s); if (on) n.add(a.id); else n.delete(a.id); return n }
+    // done / skipped as they should look after the tap; a failed save puts the old pair back
+    const show = (done, skipped) => { setDoneIds(set(done)); setSkippedIds(set(skipped)) }
+    show(!wasDone, !wasDone && skip)
     let e
     if (wasDone) {
       ;({ error: e } = await supabase.from('my_done').delete()
         .eq('assessment_id', a.id).eq('owner', userId))
     } else {
-      ;({ error: e } = await supabase.from('my_done').insert({ owner: userId, assessment_id: a.id }))
+      ;({ error: e } = await supabase.from('my_done').insert({ owner: userId, assessment_id: a.id, skipped: skip }))
       // 23505 = the row is already there (a quick second tap): ticked is what she wanted.
       if (e && e.code === '23505') e = null
     }
     if (e) {
-      flip(wasDone)
+      show(wasDone, wasSkipped)
       setStatusError('Could not save that: ' + e.message)
     }
   }
@@ -1162,13 +1193,19 @@ function ModulePage({ code, isViewer, userId, onBack }) {
               const briefs = briefsFor(a.id)
               // Owner: her status, as before. Viewer: her own my_done row only.
               const done = isDoneFor(a, { isViewer, doneIds })
+              const skipped = isSkippedFor(a, { isViewer, skippedIds })
               return (
                 <div key={a.id} className="panel p-4" style={done ? { opacity: 0.55 } : undefined}>
                   <div className="flex items-center gap-3" style={{ flexWrap: 'wrap', rowGap: 6 }}>
                     <span style={{ color: '#eaf4ff', minWidth: 140, flex: '1 1 0',
                       textDecoration: done ? 'line-through' : 'none' }}>{a.title}</span>
                     <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>{a.due_date || 'date TBC'}</span>
+                      <span className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>{skipped ? "skipped · didn't write" : a.due_date || 'date TBC'}</span>
+                      {/* s50: "we didn't write it", extended / second-opportunity rows only. */}
+                      {!done && canSkip(a) && (
+                        <button onClick={() => toggleAssessment(a, true)} className="btn small ghost"
+                          aria-label={`Skip ${a.title}: we didn't write it`} title="We didn't write it: take it off the list">Skip</button>
+                      )}
                       {/* Tick / untick, for both accounts. The owner's writes assessments.status;
                           the viewer's writes her own my_done row (toggleAssessment picks). */}
                       <button onClick={() => toggleAssessment(a)} className="icon-btn"

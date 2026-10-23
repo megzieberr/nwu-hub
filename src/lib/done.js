@@ -17,6 +17,31 @@ function has(doneIds, id) {
   return !!doneIds && typeof doneIds.has === 'function' && doneIds.has(id)
 }
 
+// "We didn't write it" (s50, her ask 2026-10-23). An extended or second opportunity is optional:
+// skipping it must take it off the list without pretending it was handed in, and without the red
+// OVERDUE line. The skip button only shows on rows whose title says so. The opportunity pattern is
+// anchored at the START of the title on purpose: the EDCC125 exam row mentions "Opp 2 = closed
+// book" in its middle, and that row is the first opportunity, not one to skip.
+const SKIPPABLE = [
+  /\bextended\b/i,
+  /\b(2nd|second)\s+opp(ortunity)?\b/i,
+  /^\s*opp(ortunity)?\.?\s*2\b/i,
+  /\btweede\s+geleentheid\b/i,
+]
+export function canSkip(a) {
+  return !!a && typeof a.title === 'string' && SKIPPABLE.some((re) => re.test(a.title))
+}
+
+// Is this row skipped, for the person looking at it?
+//   owner:  assessments.status = 'missed' (in the 0001 check list since day one).
+//   viewer: her own my_done row with skipped = true (0026). Its id is ALSO in doneIds, so every
+//           list drops it exactly like a tick; skippedIds only changes the label.
+export function isSkippedFor(a, { isViewer = false, skippedIds } = {}) {
+  if (!a) return false
+  if (!isViewer) return a.status === 'missed'
+  return has(skippedIds, a.id)
+}
+
 // Is this assessment ticked off, for the person looking at it?
 //   owner:  anything but 'upcoming' counts as done (unchanged from before own ticks).
 //   viewer: only her own my_done row counts. The owner's status is ignored completely.
